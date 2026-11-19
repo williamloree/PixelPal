@@ -16,7 +16,28 @@ use windows::core::{BOOL, w};
 /// Clics reçus par les fenêtres (handle de fenêtre), lus par la boucle principale.
 pub static CLICS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 pub static ECRANS_CHANGES: Mutex<bool> = Mutex::new(false);
+pub static QUITTER: Mutex<bool> = Mutex::new(false);
 const WM_ICONE: u32 = WM_APP + 1;
+
+/// Menu du clic droit sur l'icône de la zone de notification.
+unsafe fn menu_icone(h: HWND) {
+    unsafe {
+        let Ok(m) = CreatePopupMenu() else { return };
+        let _ = AppendMenuW(m, MF_STRING, 1, w!("Ouvrir le panneau"));
+        let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(m, MF_STRING, 2, w!("Quitter PixelPal"));
+        let mut p = POINT::default();
+        let _ = GetCursorPos(&mut p);
+        let _ = SetForegroundWindow(h); // sinon le menu ne se ferme pas en cliquant ailleurs
+        let choix = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, p.x, p.y, None, h, None);
+        let _ = DestroyMenu(m);
+        match choix.0 {
+            1 => CLICS.lock().unwrap().push(h.0 as isize),
+            2 => *QUITTER.lock().unwrap() = true,
+            _ => {}
+        }
+    }
+}
 
 fn wstr(s: &str) -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() }
 
@@ -31,7 +52,8 @@ unsafe extern "system" fn proc_fenetre(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_DISPLAYCHANGE => { *ECRANS_CHANGES.lock().unwrap() = true; LRESULT(0) }
         WM_ICONE => {
             let e = (lp.0 & 0xFFFF) as u32;
-            if e == WM_LBUTTONUP || e == WM_RBUTTONUP { CLICS.lock().unwrap().push(h.0 as isize); }
+            if e == WM_LBUTTONUP { CLICS.lock().unwrap().push(h.0 as isize); }
+            if e == WM_RBUTTONUP { unsafe { menu_icone(h) }; }
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(h, msg, wp, lp) },
@@ -255,7 +277,34 @@ pub fn curseur() -> (f32, f32) {
     (p.x as f32, p.y as f32)
 }
 
-/// Icône dans la zone de notification ; un clic dessus ouvre le panneau.
+/// Tête de l'aventurier (chapeau compris), en icône 32 × 32.
+fn icone_perso() -> Option<HICON> {
+    let img = crate::sprites::Sprites::default().image_n("aventurier", "idle", 0).clone();
+    let mut t = Toile::new(32, 32);
+    t.coller(&img, -2.0, -3.0, 2.0, false, 1.0); // cadrage sur la tête (lignes 2 à 17 du sprite)
+    unsafe {
+        let ecran = GetDC(None);
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER { biSize: size_of::<BITMAPINFOHEADER>() as u32, biWidth: 32, biHeight: -32, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
+            ..Default::default()
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let couleur = CreateDIBSection(Some(ecran), &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+        ReleaseDC(None, ecran);
+        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, 32 * 32 * 4);
+        for (i, &c) in t.px.iter().enumerate() {
+            dst[i * 4..i * 4 + 4].copy_from_slice(&[c as u8, (c >> 8) as u8, (c >> 16) as u8, (c >> 24) as u8]);
+        }
+        let masque = CreateBitmap(32, 32, 1, 1, Some([0u8; 128].as_ptr() as *const c_void));
+        let info = ICONINFO { fIcon: true.into(), xHotspot: 0, yHotspot: 0, hbmMask: masque, hbmColor: couleur };
+        let h = CreateIconIndirect(&info).ok();
+        let _ = DeleteObject(couleur.into());
+        let _ = DeleteObject(masque.into());
+        h
+    }
+}
+
+/// Icône dans la zone de notification : clic gauche = panneau, clic droit = menu (panneau, quitter).
 pub struct Icone { pub hwnd: HWND }
 
 impl Icone {
@@ -265,7 +314,7 @@ impl Icone {
                 Some(GetModuleHandleW(None).unwrap().into()), None).expect("fenêtre icône");
             let mut nid = NOTIFYICONDATAW {
                 cbSize: size_of::<NOTIFYICONDATAW>() as u32, hWnd: hwnd, uID: 1, uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
-                uCallbackMessage: WM_ICONE, hIcon: LoadIconW(None, IDI_APPLICATION).unwrap_or_default(), ..Default::default()
+                uCallbackMessage: WM_ICONE, hIcon: icone_perso().unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default()), ..Default::default()
             };
             let tip = wstr("PixelPal : clic pour ouvrir le panneau");
             nid.szTip[..tip.len()].copy_from_slice(&tip);

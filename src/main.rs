@@ -159,6 +159,7 @@ fn lancer(profil: Option<String>) {
             relance = Some(Instant::now() + Duration::from_secs(4));
         }
         if relance.is_some_and(|r| Instant::now() >= r) { app.quitter = true; }
+        if *fenetres::QUITTER.lock().unwrap() { app.quitter = true; }
         if sauvegarde_contacts.elapsed() > Duration::from_secs(20) { sauvegarde_contacts = Instant::now(); app.sauver_contacts(); }
 
         app.monde.maj(dt);
