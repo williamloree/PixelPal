@@ -1,92 +1,125 @@
-# PixelPal
+<p align="center"><img src="assets/images/logo.png" width="96" height="96" alt=""></p>
 
-Un petit aventurier en pixel art vit sur ton bureau. Il passe d'un écran à l'autre, escalade les bords, marche au plafond et sur les fenêtres. On peut l'attraper à la souris. Il a faim, comme un Tamagotchi, et livre des lettres par portail aux collègues qui ont aussi PixelPal, même s'ils sont sur un autre réseau.
+<h1 align="center">PixelPal</h1>
 
-## Installer et lancer
+<p align="center">Un petit aventurier en pixel art qui vit sur ton bureau : il passe d'un écran à l'autre, escalade, marche au plafond, a faim comme un Tamagotchi, et livre tes lettres par portail aux collègues, où qu'ils soient.</p>
 
-Télécharger `pixelpal.exe` depuis la dernière [release](https://github.com/williamloree/PixelPal/releases), puis le lancer. Il se met ensuite à jour tout seul.
+<p align="center">
+  <a href="https://github.com/williamloree/PixelPal/releases/latest"><img alt="Dernière version" src="https://img.shields.io/github/v/release/williamloree/PixelPal?label=version&color=f2c14e"></a>
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-b7410e?logo=rust&logoColor=white">
+  <img alt="egui" src="https://img.shields.io/badge/egui-0.37-4b2f7e">
+  <img alt="iroh" src="https://img.shields.io/badge/r%C3%A9seau-iroh%20pair%E2%80%91%C3%A0%E2%80%91pair-6fe7ff">
+  <img alt="Plateforme" src="https://img.shields.io/badge/plateforme-Windows-0078d4">
+</p>
 
-Au premier lancement, Windows demande l'accès au réseau : **Autoriser** (nécessaire pour les messages). Il n'y a qu'une seule instance par profil.
+<p align="center">Fait par William Loree.</p>
 
-Pour développer :
+![Le panneau de PixelPal : l'aventurier attend devant sa maisonnette, sous la lune, un château féerique sur la colline.](assets/images/banniere.png)
 
-```powershell
-cargo build --release
-.\target\release\pixelpal.exe              # ton personnage
-.\target\release\pixelpal.exe --profil=2   # un 2e utilisateur sur le même PC, pour tester les messages
-```
+PixelPal lit la disposition de tes écrans dans Windows et y fait vivre un personnage. Il se promène au niveau du bureau, derrière tes fenêtres : une appli au premier plan le cache, et il ne vient jamais s'installer sur celle que tu utilises. Quand un écran est au-dessus, il pose une échelle ; quand il est en dessous, il creuse un trou ; quand rien ne se touche, il ouvre un portail.
 
-## Utilisation
+On peut l'attraper à la souris, le nourrir, le caresser… et l'oublier : sans manger, il finit en fantôme au-dessus de sa tombe. Et quand tu écris à un collègue, il part livrer la lettre en personne : un visiteur sort d'un portail sur l'écran de chaque destinataire, en même temps, même à l'autre bout d'internet.
 
-| Geste | Effet |
+## Installer
+
+Télécharger `pixelpal.exe` depuis la [dernière version](https://github.com/williamloree/PixelPal/releases/latest) et le lancer. C'est tout : il se met ensuite à jour tout seul.
+
+Au premier lancement, Windows demande l'accès au réseau : **Autoriser** (il en a besoin pour les lettres).
+
+| Mode | Commande |
 | --- | --- |
-| Clic sur le personnage | menu de soins : jauges ventre / santé / joie, nourrir (pomme, baie, champignon), caresser, panneau ; ressusciter s'il est mort |
-| Glisser le personnage | il est tenu par le col ; lâché (ou lancé) de haut, il ouvre son parachute… ou s'écrase s'il n'en a plus |
-| Clic sur un visiteur ou sa bulle | message lu : le visiteur salue et repart, l'expéditeur est prévenu |
-| Clic gauche sur l'icône de notification | panneau |
-| Clic droit sur l'icône de notification | « Ouvrir le panneau » / « Quitter PixelPal » |
+| Normal | `pixelpal.exe` |
+| Développement | `cargo build --release` puis `.\target\release\pixelpal.exe` |
+| Deuxième utilisateur sur le même PC (tests) | `pixelpal.exe --profil=2` |
 
-Par défaut, il vit **derrière les fenêtres**, au niveau du bureau : une appli au premier plan le cache, et il ne vient jamais se promener sur la fenêtre active. Les visiteurs qui apportent une lettre, eux, restent toujours visibles. L'option « Rester derrière les fenêtres » se règle dans panneau > Perso.
+## Ce que tu vois
 
-## Ce qu'il fait
-
-| Situation | Comportement |
+| Sur l'écran | Ce que ça veut dire |
 | --- | --- |
-| Écran voisin, même hauteur | il passe à pied |
-| Écran voisin plus haut / beaucoup plus bas | il pose une échelle, grimpe ou descend, puis **range son échelle** |
-| Écran voisin un peu plus bas (≤ 160 px) | il saute |
-| Écran en dessous | il creuse un trou à la pelle et tombe (le trou se rebouche) |
-| Écran au-dessus | il pose une échelle, grimpe, la remonte avec lui ; pour redescendre, il creuse |
-| Écrans qui ne se touchent pas | il voyage par portail |
-| Bord d'écran sans voisin | il l'escalade, puis marche au plafond tête en bas, et redescend (ou se laisse tomber en parachute) |
-| Fenêtre ouverte (pas la fenêtre active) | il saute ou monte à l'échelle sur son dessus, s'y promène, la suit si elle bouge, tombe si elle se ferme |
-| Lâché de haut | parachute s'il en a ; sinon il s'écrase, KO avec des étoiles (−15 santé) |
+| **L'aventurier** qui se promène, s'assoit, salue | Il va bien. Clic : menu de soins (jauges, nourriture, caresse, panneau). |
+| **Une échelle** qu'il cloue puis range une fois monté | Il change d'écran (écran plus haut, ou plus bas). |
+| **Un trou** creusé à la pelle | L'écran du dessous ; le trou se rebouche après sa chute. |
+| **Lui, tête en bas**, en haut de l'écran | Il a escaladé le bord et se promène au plafond. |
+| **Lui, sur le dessus d'une fenêtre** | Il y est monté (saut ou échelle). Il suit la fenêtre si elle bouge, tombe si elle se ferme. |
+| **Un parachute** rayé rouge et crème | Lâché de haut, il l'ouvre. Sans parachute : KO, étoiles, −15 santé. |
+| **Un portail** violet | Il part livrer une lettre, ou voyage vers un écran qu'aucun chemin ne relie. |
+| **Un visiteur** avec une lettre et une bulle | Un collègue t'a écrit. Clic : lu ; il salue et repart, l'expéditeur est prévenu. |
+| **Une tombe et un fantôme** | Il est mort de faim. Clic sur le fantôme : « Ressusciter ». |
+
+![Six moments : parachute, échelle, portail, repas, chute sans parachute, fantôme.](assets/images/moments.png)
 
 ## Tamagotchi
 
-- Le temps ne compte que quand l'appli est ouverte. Un repas toutes les 3 h environ. Sans manger, il a faim au bout de ~6 h, s'affaiblit, puis meurt au bout de ~12 h.
-- **Réserve** : pomme (+30 ventre), baie féerique (+15 ventre, +20 joie), champignon lumineux (+45 ventre, +10 santé). Le jardin donne un aliment toutes les 40 min d'utilisation, l'atelier plie un parachute toutes les 2 h (3 au plus).
-- **Mort** : il s'effondre, une tombe apparaît et son fantôme flotte au-dessus. Clic sur le fantôme (ou panneau > Soins) : « Ressusciter ». Son âge repart à zéro, son record est gardé.
-- Tout est enregistré dans `%APPDATA%\PixelPal\pixelpal.json`.
+<img src="assets/images/menu.png" width="208" align="right" alt="Menu de soins : jauges ventre, santé, joie, et la réserve (pomme, baie, champignon), caresser, panneau.">
 
-## Messages : pair-à-pair avec iroh
-
-Pas de serveur à héberger. Chaque PixelPal a un **identifiant public fixe** (sa clé dans `%APPDATA%\PixelPal\cle.bin`) : c'est son **code d'invitation** (52 caractères, onglet Contacts).
-
-- La connexion se fait avec [iroh](https://www.iroh.computer/) : chiffrée de bout en bout, elle perce les box (NAT) pour aller en direct. Quand c'est impossible, elle passe par les relais publics de n0, qui ne peuvent pas lire le contenu. Le code marche partout : télétravail, 4G, autre site.
-- Sur le même réseau, les PixelPal se trouvent aussi tout seuls (annonce UDP, port 47899, et mDNS).
-- Onglet Groupes : on crée un groupe, qui est envoyé à tous ses membres. Onglet Lettre : « Tout le groupe » ou « Seulement… ». Le personnage ouvre un portail, la lettre part chez tous **en même temps**, et chez chacun un visiteur sort d'un portail près de la souris.
-- L'identité de l'expéditeur vient de la connexion chiffrée : personne ne peut se faire passer pour un autre.
-
-## Releases et mise à jour automatique
-
-- **Workflow** `.github/workflows/release.yml` : à chaque push sur `main` (hors fichiers `.md`), il lance les tests, compile pour Windows, puis publie une release `vX.Y.N` avec `pixelpal.exe`. `X.Y` vient de `Cargo.toml`, et `N` est le numéro d'exécution du workflow.
-- **Mise à jour** (`src/maj.rs`) : l'exécutable publié vérifie la dernière release au démarrage, toutes les 6 heures, ou via panneau > Perso > « Vérifier maintenant ». Il télécharge, remplace son exécutable, annonce la nouvelle version et redémarre. Une version compilée à la main ne se met jamais à jour.
-- **Dépôt privé** : GitHub refuse alors le téléchargement sans authentification. Il faut un jeton (« fine-grained », lecture seule, *Contents: Read*) dans `%APPDATA%\PixelPal\github-token.txt` ou dans la variable `PIXELPAL_GITHUB_TOKEN`.
-
-## Le personnage et le panneau
-
-Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche…) dessinée sur une toile de 40 × 40 pixels, puis détourée automatiquement calque par calque. Il y a 21 animations, dont la marche, l'escalade, le creusement, le portail, le parachute, le repas, la joie et le KO. Les tenues sont des variantes de palette ; tout est dans `src/sprites.rs`.
-
-Le panneau (egui) a pour thème une nuit au jardin féerique. En bannière, une scène calme où il attend devant sa maisonnette (fumée de cheminée, lanterne) avec un château sur la colline. Les titres sont dans une police pixel maison, les boutons en Segoe UI. Onglets : Lettre, Soins, Groupes, Contacts, Écrans, Perso (tenue, comportement, storyboard animé, mises à jour).
-
-- Planche PNG des animations : `pixelpal.exe --planche planche.png [--look bleu]`.
-- Aperçu de la bannière : `pixelpal.exe --scene scene.png`.
-
-## Code
-
-| Fichier | Rôle |
+| | |
 | --- | --- |
-| `src/main.rs` | boucle principale (30 images/s), prise à la souris, menu, commandes du panneau, envois |
-| `src/monde.rs` | simulation : écrans, trajets, surfaces (sol, fenêtres, plafond), chutes, soins, visiteurs (+ tests) |
-| `src/soins.rs` | Tamagotchi : faim, santé, joie, réserve, jardin, mort (+ tests) |
-| `src/menu.rs` | menu de soins en pixel art |
-| `src/sprites.rs` | personnage par poses ; échelle, trou, portail, parachute, tombe, cœurs |
-| `src/fenetres.rs` | fenêtres Windows transparentes, ordre d'empilement, fenêtres praticables, écrans, icône |
-| `src/reseau.rs`, `src/pair.rs` | pair-à-pair iroh, découverte locale, canal local du panneau |
-| `src/panneau.rs`, `src/scene.rs` | panneau egui, bannière, police pixel, icônes |
-| `src/maj.rs` | mise à jour automatique depuis les releases GitHub |
-| `src/config.rs` | profil, contacts, groupes, soins, options |
-| `tools/*.ps1` | outils de test : piloter une instance (`ctl.ps1`, avec `PIXELPAL_JETON`), cliquer, lâcher, ouvrir le menu, capturer |
+| **Rythme** | Le temps ne compte que quand l'appli est ouverte (week-ends et vacances en pause). Un repas toutes les 3 h environ. |
+| **Faim** | Ventre vide au bout de ~6 h : il s'affaiblit, marche moins vite, s'assoit souvent. Encore ~6 h sans manger : il meurt. |
+| **Réserve** | Pomme (+30 ventre), baie féerique (+15 ventre, +20 joie), champignon lumineux (+45 ventre, +10 santé). Le jardin en donne un toutes les 40 min. |
+| **Parachutes** | 3 au plus, l'atelier en plie un toutes les 2 h. |
+| **Mort** | Tombe et fantôme ; la résurrection remet son âge à zéro, son record est gardé. |
 
-Tests : `cargo test` (trajets entre écrans, échelles rangées, chutes avec et sans parachute, fenêtres, escalade, repas, mort et résurrection).
+Clic sur le personnage pour le menu, ou panneau > **Soins** pour les détails.
+
+<br clear="right">
+
+## Lettres : pair-à-pair, sans serveur
+
+Chaque PixelPal a un **code d'invitation** fixe (52 caractères, onglet Contacts) : son identifiant public, tiré de sa clé. Ce code marche partout.
+
+| | |
+| --- | --- |
+| **Connexion** | [iroh](https://www.iroh.computer/) : chiffrée de bout en bout, elle perce les box (NAT) pour aller en direct ; sinon elle passe par un relais public de n0, qui ne peut rien lire. |
+| **Réseau local** | Les PixelPal se trouvent tout seuls (annonce UDP + mDNS), sans échanger de code. |
+| **Groupes** | On crée un groupe, il est envoyé à tous ses membres. Lettre à « tout le groupe » ou à quelques-uns. |
+| **Livraison** | La lettre part chez tous **en même temps** ; chacun voit un visiteur avec la tenue de l'expéditeur. |
+| **Identité** | Elle vient de la connexion chiffrée : personne ne peut se faire passer pour un autre. |
+
+## Personnage et tenues
+
+![Les cinq tenues : aventurier kaki, bleu marine, forêt, rouge, mage violet.](assets/images/tenues.png)
+
+Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche) dessinée sur 40 × 40 pixels puis détourée calque par calque. Il y a 21 animations : marche, escalade, creuser, poser une échelle, portail, parachute, repas, joie, KO… Le storyboard animé est dans panneau > Perso.
+
+<details>
+<summary>Planche de toutes les animations</summary>
+
+![Planche des 21 animations, image par image.](assets/images/planche.png)
+
+</details>
+
+## Mises à jour
+
+| | |
+| --- | --- |
+| **Publication** | À chaque push sur `main`, le workflow `.github/workflows/release.yml` lance les tests, compile et publie `vX.Y.N` avec `pixelpal.exe` (`X.Y` dans `Cargo.toml`, `N` = numéro d'exécution). |
+| **Dans l'appli** | Vérification au démarrage, toutes les 6 h, ou panneau > Perso > « Vérifier maintenant ». Il télécharge, remplace son exécutable et redémarre en annonçant la nouvelle version. |
+| **Dépôt privé** | Il faut alors un jeton GitHub en lecture (*Contents: Read*) dans `%APPDATA%\PixelPal\github-token.txt`. |
+
+## Raccourcis
+
+| Geste | Action |
+| --- | --- |
+| Clic sur le personnage | Menu de soins |
+| Glisser le personnage | Le tenir par le col ; le lâcher ou le lancer |
+| Clic sur un visiteur ou sa bulle | Marquer la lettre comme lue |
+| Clic gauche sur l'icône de notification | Panneau |
+| Clic droit sur l'icône de notification | « Ouvrir le panneau » / « Quitter PixelPal » |
+
+## Comment ça marche
+
+| Partie | Rôle |
+| --- | --- |
+| `src/main.rs` | Boucle principale (30 images/s) : prise à la souris, menu, commandes du panneau, envois. |
+| `src/monde.rs` | Simulation : écrans et liens, trajets, surfaces (sol, fenêtres, plafond), chutes, visiteurs. |
+| `src/soins.rs` | Tamagotchi : faim, santé, joie, réserve, jardin, mort. |
+| `src/sprites.rs` | Le personnage par poses ; échelle, trou, portail, parachute, tombe, cœurs. |
+| `src/fenetres.rs` | Petites fenêtres Windows transparentes, ordre d'empilement (derrière les applis), fenêtres praticables, écrans, icône. |
+| `src/reseau.rs`, `src/pair.rs` | Pair-à-pair iroh, découverte locale, canal local du panneau (127.0.0.1). |
+| `src/panneau.rs`, `src/scene.rs`, `src/menu.rs` | Panneau egui, bannière, police pixel maison, menu de soins. |
+| `src/maj.rs` | Mise à jour automatique depuis les releases. |
+| `src/vitrine.rs` | Les images de ce README : `pixelpal.exe --vitrine assets/images`. |
+| `tools/*.ps1` | Outils de test : piloter une instance (`ctl.ps1` avec `PIXELPAL_JETON`), cliquer, lâcher, ouvrir le menu, capturer. |
+
+Tests : `cargo test` (trajets entre écrans, échelles rangées, chutes avec et sans parachute, fenêtres, escalade, repas, mort et résurrection). Données : `%APPDATA%\PixelPal\` (`pixelpal.json`, `cle.bin`).

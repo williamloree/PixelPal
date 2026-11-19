@@ -12,6 +12,7 @@ mod scene;
 mod soins;
 mod sprites;
 mod toile;
+mod vitrine;
 
 use config::{Config, Groupe, Membre};
 use fenetres::Calque;
@@ -43,6 +44,11 @@ fn main() {
             planche.coller(&t, 0.0, (i as i32 * scene::SH * 3) as f32, 3.0, false, 1.0);
         }
         return ecrire_png(&arg("--scene").unwrap_or_else(|| "scene.png".into()), &planche);
+    }
+    if args.iter().any(|a| a == "--vitrine") {
+        // images du README
+        let _ = vitrine::generer(&arg("--vitrine").unwrap_or_else(|| "assets".into()));
+        return;
     }
     if args.iter().any(|a| a == "--panneau") {
         let port: u16 = arg("--panneau").and_then(|p| p.parse().ok()).unwrap_or(reseau::PORT_TCP);
