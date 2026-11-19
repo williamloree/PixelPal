@@ -48,5 +48,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           Copy-Item target/release/pixelpal.exe pixelpal.exe
-          $notes = git log -1 --pretty=%B
+          $notes = (git log -1 --pretty=%B) -join "`n"
           gh release create "v$env:VERSION" pixelpal.exe --title "PixelPal $env:VERSION" --notes "$notes" --target $env:GITHUB_SHA
