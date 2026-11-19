@@ -57,9 +57,15 @@ pub fn requete(host: &str, port: u16, v: &Value, delai: Duration) -> Result<Valu
 }
 
 impl Reseau {
-    pub fn demarrer(moi: Identite, connus: &[Membre], jeton: String, tx: Sender<Evt>) -> Arc<Reseau> {
-        let (ecoute, port) = (PORT_TCP..PORT_TCP + 40)
-            .find_map(|p| TcpListener::bind(("0.0.0.0", p)).ok().map(|l| (l, p)))
+    pub fn demarrer(moi: Identite, connus: &[Membre], jeton: String, tx: Sender<Evt>, garder_port: bool) -> Arc<Reseau> {
+        // après une mise à jour, l'ancienne version libère le port dans quelques instants : on l'attend
+        let mut premier = None;
+        for _ in 0..if garder_port { 40 } else { 1 } {
+            if let Ok(l) = TcpListener::bind(("0.0.0.0", PORT_TCP)) { premier = Some((l, PORT_TCP)); break; }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let (ecoute, port) = premier.or_else(|| (PORT_TCP + 1..PORT_TCP + 40)
+            .find_map(|p| TcpListener::bind(("0.0.0.0", p)).ok().map(|l| (l, p))))
             .expect("aucun port TCP libre");
         let contacts = connus.iter().map(|m| (m.id.clone(), Contact { id: m.id.clone(), nom: m.nom.clone(), host: m.host.clone(), port: m.port, look: "aventurier".into(), vu: None })).collect();
         let r = Arc::new(Reseau { port, moi: Mutex::new(moi), contacts: Mutex::new(contacts), jeton, tx: Mutex::new(tx) });

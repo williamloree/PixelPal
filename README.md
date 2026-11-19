@@ -10,7 +10,13 @@ cargo build --release
 .\target\release\pixelpal.exe --profil=2   # un 2e utilisateur sur le même PC, pour tester les messages
 ```
 
-Au premier lancement, Windows demande l'accès au réseau : **Autoriser** (nécessaire pour les messages).
+Au premier lancement, Windows demande l'accès au réseau : **Autoriser** (nécessaire pour les messages). Une seule instance par profil : relancer l'exécutable ne crée pas de deuxième personnage.
+
+## Releases et mise à jour automatique
+
+- **Workflow** `.github/workflows/release.yml` : à chaque push sur `main` (hors fichiers `.md`), tests, compilation Windows, puis release `v0.1.N` avec `pixelpal.exe` en pièce jointe. `N` = numéro d'exécution du workflow : rien à incrémenter à la main. Pour passer en 0.2, changer `version` dans `Cargo.toml`.
+- **Mise à jour** (`src/maj.rs`) : l'exécutable publié vérifie la dernière release au démarrage, toutes les 6 heures, ou via panneau > Perso > « Vérifier maintenant ». S'il y a plus récent, il télécharge, remplace son exécutable, annonce « Nouvelle version… » et redémarre tout seul. Une version compilée à la main ne se met jamais à jour.
+- **Dépôt privé** : GitHub refuse alors le téléchargement sans authentification. Il faut un jeton (« fine-grained », lecture seule sur ce dépôt, permission *Contents: Read*) dans `%APPDATA%\PixelPal\github-token.txt` ou la variable `PIXELPAL_GITHUB_TOKEN`, sur chaque poste.
 
 - **Clic sur le personnage** (ou sur l'icône de la zone de notification) : ouvre le panneau.
 - **Clic sur un visiteur ou sa bulle** : marque le message comme lu ; le visiteur salue et repart par son portail, l'expéditeur est prévenu.
@@ -45,8 +51,13 @@ Limite actuelle : entre deux réseaux séparés par une box (internet), la conne
 
 Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche…) dessinée sur une toile de 40 × 40 pixels, puis détourée automatiquement calque par calque (dos, corps, bras avant). 13 animations : repos, marche, marche avec lettre, saut, réception, chute, escalade, creuser, poser une échelle, ouvrir un portail, présenter la lettre, saluer, assis. Les autres tenues sont des variantes de palette.
 
-- Storyboard animé : panneau > Personnage.
+- Storyboard animé : panneau > Perso.
 - Planche PNG : `pixelpal.exe --planche planche.png [--look bleu]`.
+- Aperçu de la scène du panneau : `pixelpal.exe --scene scene.png`.
+
+## Le panneau
+
+Thème « temple au jardin féerique » : bannière animée en pixel art (le personnage court sur un chemin de pierre et saute les rochers, façon Temple Run, vers un temple aux runes lumineuses ; lune, aurore, lianes, champignons géants, fée, lucioles), dalles moussues en fond, onglets en tablettes de pierre, titres en police pixel maison (`src/scene.rs`), cadres ornés de feuillage, boutons dorés.
 - Modifier le personnage : `src/sprites.rs` (`palette`, `tete`, `chapeau`, `corps`, `sac`, et les poses dans `anims()`).
 
 ## Code
@@ -59,5 +70,8 @@ Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche…) 
 | `src/fenetres.rs` | fenêtres Windows transparentes, bulles, écrans, icône |
 | `src/reseau.rs` | pair-à-pair TCP + découverte UDP |
 | `src/panneau.rs` | panneau egui (processus séparé) |
+| `src/scene.rs` | scène animée du panneau, police pixel, icônes, dalles |
+| `src/maj.rs` | mise à jour automatique depuis les releases GitHub |
+| `.github/workflows/release.yml` | compilation et publication des releases |
 | `src/config.rs` | profil, contacts, groupes : `%APPDATA%\PixelPal\pixelpal.json` |
 | `tools/clic-perso.ps1` | test : clique sur le personnage et capture l'écran |

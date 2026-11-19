@@ -38,6 +38,23 @@ unsafe extern "system" fn proc_fenetre(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     }
 }
 
+/// Prend le verrou « une seule instance par profil » (libéré à la fermeture du processus).
+/// `attendre` : après une mise à jour, on attend que l'ancienne version ait fini de se fermer.
+pub fn verrou_instance(profil: &Option<String>, attendre: bool) -> bool {
+    use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let nom = wstr(&format!("Local\\PixelPal-{}", profil.as_deref().unwrap_or("principal")));
+    unsafe {
+        let Ok(h) = CreateMutexW(None, true, windows::core::PCWSTR(nom.as_ptr())) else { return true };
+        if GetLastError() != ERROR_ALREADY_EXISTS { return true; } // le verrou reste à nous jusqu'à la fin du processus
+        if attendre {
+            let r = WaitForSingleObject(h, 15_000);
+            if r == WAIT_OBJECT_0 || r == WAIT_ABANDONED { return true; }
+        }
+        let _ = CloseHandle(h);
+        false
+    }
+}
+
 pub fn initialiser() {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

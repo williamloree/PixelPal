@@ -2,9 +2,11 @@
 
 mod config;
 mod fenetres;
+mod maj;
 mod monde;
 mod panneau;
 mod reseau;
+mod scene;
 mod sprites;
 mod toile;
 
@@ -14,8 +16,8 @@ use monde::{Monde, MOI, Sortie, TypeObjet};
 use reseau::{Evt, Identite, Reseau};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use toile::Toile;
 
@@ -26,6 +28,17 @@ fn main() {
         let sortie = arg("--planche").unwrap_or_else(|| "planche.png".into());
         let look = arg("--look").unwrap_or_else(|| "aventurier".into());
         return ecrire_png(&sortie, &sprites::planche(&look, 4));
+    }
+    if args.iter().any(|a| a == "--scene") {
+        // aperçu de la scène du panneau, à quatre instants
+        let mut s = sprites::Sprites::default();
+        let mut planche = Toile::new(scene::SW * 3, scene::SH * 3 * 4);
+        for (i, tm) in [1.0f32, 2.3, 4.1, 7.7].iter().enumerate() {
+            let mut t = Toile::new(scene::SW, scene::SH);
+            scene::scene(&mut t, *tm, &mut s, "aventurier", maj::VERSION);
+            planche.coller(&t, 0.0, (i as i32 * scene::SH * 3) as f32, 3.0, false, 1.0);
+        }
+        return ecrire_png(&arg("--scene").unwrap_or_else(|| "scene.png".into()), &planche);
     }
     if args.iter().any(|a| a == "--panneau") {
         let port: u16 = arg("--panneau").and_then(|p| p.parse().ok()).unwrap_or(reseau::PORT_TCP);
@@ -56,22 +69,60 @@ struct Appli {
     n_envoi: u64,
     panneau: Option<std::process::Child>,
     quitter: bool,
+    etat_maj: Arc<Mutex<String>>,
+    verifier_maj: Sender<()>,
+}
+
+/// Fil de mise à jour : vérifie au démarrage, toutes les 6 heures, ou à la demande du panneau.
+fn fil_maj(etat: Arc<Mutex<String>>, demande: Receiver<()>, prete: Sender<String>) {
+    if !maj::active() {
+        *etat.lock().unwrap() = "Mises à jour désactivées (version compilée à la main)".into();
+        return;
+    }
+    std::thread::spawn(move || loop {
+        *etat.lock().unwrap() = "Recherche d'une nouvelle version…".into();
+        let r = maj::verifier().and_then(|n| match n {
+            None => Ok(format!("À jour (vérifié à {})", heure())),
+            Some(n) => {
+                *etat.lock().unwrap() = format!("Téléchargement de la version {}…", n.version);
+                maj::installer(&n)?;
+                let _ = prete.send(n.version.clone());
+                Ok(format!("Version {} installée, redémarrage…", n.version))
+            }
+        });
+        *etat.lock().unwrap() = r.unwrap_or_else(|e| format!("Échec de la vérification : {e}"));
+        let _ = demande.recv_timeout(Duration::from_secs(6 * 3600));
+    });
+}
+
+fn heure() -> String {
+    let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("{:02}:{:02} UTC", s / 3600 % 24, s / 60 % 60)
 }
 
 fn lancer(profil: Option<String>) {
+    let apres_maj = std::env::args().any(|a| a == "--apres-maj");
+    if !fenetres::verrou_instance(&profil, apres_maj) { return; } // déjà lancé pour ce profil
+    maj::nettoyer();
     let cfg = Config::charger(&profil);
     let jeton = config::id_aleatoire();
     let (tx, rx) = channel::<Evt>();
-    let reseau = Reseau::demarrer(Identite { id: cfg.id.clone(), nom: cfg.nom.clone(), look: cfg.look.clone() }, &cfg.contacts, jeton.clone(), tx);
+    let reseau = Reseau::demarrer(Identite { id: cfg.id.clone(), nom: cfg.nom.clone(), look: cfg.look.clone() }, &cfg.contacts, jeton.clone(), tx, apres_maj);
     let (tx_res, rx_res) = channel::<String>();
+    let etat_maj = Arc::new(Mutex::new(String::new()));
+    let (verifier_maj, demande_maj) = channel::<()>();
+    let (tx_prete, rx_prete) = channel::<String>();
+    fil_maj(etat_maj.clone(), demande_maj, tx_prete);
+    let mut relance: Option<Instant> = None;
 
     fenetres::initialiser();
     let icone = fenetres::Icone::new();
     let mut monde = Monde::new(&cfg.nom, &cfg.look);
     let (ecrans, k) = fenetres::ecrans();
     monde.definir_ecrans(ecrans, k);
+    if apres_maj { monde.dire(MOI, &format!("Me revoilà, en version {} !", maj::VERSION), 5.0); }
 
-    let mut app = Appli { cfg, profil, monde, reseau, jeton, envois: HashMap::new(), n_envoi: 0, panneau: None, quitter: false };
+    let mut app = Appli { cfg, profil, monde, reseau, jeton, envois: HashMap::new(), n_envoi: 0, panneau: None, quitter: false, etat_maj, verifier_maj };
     let mut sprites = sprites::Sprites::default();
     let mut calques: HashMap<String, Calque> = HashMap::new();
     let mut dernier = Instant::now();
@@ -103,6 +154,11 @@ fn lancer(profil: Option<String>) {
 
         while let Ok(evt) = rx.try_recv() { app.evenement(evt); }
         while let Ok(r) = rx_res.try_recv() { app.monde.resultat_envoi(r); }
+        if let Ok(v) = rx_prete.try_recv() {
+            app.monde.dire(MOI, &format!("Nouvelle version {v} ! Je reviens tout de suite…"), 5.0);
+            relance = Some(Instant::now() + Duration::from_secs(4));
+        }
+        if relance.is_some_and(|r| Instant::now() >= r) { app.quitter = true; }
         if sauvegarde_contacts.elapsed() > Duration::from_secs(20) { sauvegarde_contacts = Instant::now(); app.sauver_contacts(); }
 
         app.monde.maj(dt);
@@ -121,6 +177,11 @@ fn lancer(profil: Option<String>) {
     }
     app.sauver_contacts();
     if let Some(mut p) = app.panneau.take() { let _ = p.kill(); }
+    if relance.is_some() {
+        drop(calques);
+        drop(icone);
+        maj::relancer();
+    }
 }
 
 /// Met à jour les petites fenêtres : décors d'abord, puis personnages, puis bulles (ordre d'empilement).
@@ -316,6 +377,11 @@ impl Appli {
                 json!({"ok": true})
             }
             "quitter" => { self.quitter = true; json!({"ok": true}) }
+            "maj" => {
+                if !maj::active() { return json!({"ok": false, "erreur": "version compilée à la main : pas de mise à jour automatique"}); }
+                let _ = self.verifier_maj.send(());
+                json!({"ok": true})
+            }
             _ => json!({"ok": false, "erreur": "commande inconnue"}),
         }
     }
@@ -328,6 +394,8 @@ impl Appli {
         json!({
             "profil": {"id": self.cfg.id, "nom": self.cfg.nom, "look": self.cfg.look},
             "profil_arg": self.profil,
+            "version": maj::VERSION,
+            "maj": *self.etat_maj.lock().unwrap(),
             "code": format!("{}:{}", reseau::ip_locale(), self.reseau.port),
             "contacts": contacts,
             "groupes": self.cfg.groupes,

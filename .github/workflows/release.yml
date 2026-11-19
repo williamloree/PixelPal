@@ -1,0 +1,52 @@
+# À chaque push sur main : tests, compilation Windows, publication d'une release.
+# Version = majeur.mineur de Cargo.toml + numéro d'exécution (0.1.12, 0.1.13…) : rien à incrémenter à la main.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Numéro de version
+        shell: pwsh
+        run: |
+          $m = (Select-String -Path Cargo.toml -Pattern '^version = "(\d+)\.(\d+)\.\d+"').Matches[0]
+          $v = "$($m.Groups[1].Value).$($m.Groups[2].Value).${{ github.run_number }}"
+          (Get-Content Cargo.toml) -replace '^version = ".*"$', "version = `"$v`"" | Set-Content Cargo.toml
+          "VERSION=$v" >> $env:GITHUB_ENV
+          "Version $v"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --release
+
+      - name: Compilation
+        run: cargo build --release
+        env:
+          PIXELPAL_CI: "1" # active la mise à jour automatique dans l'exécutable publié
+
+      - name: Publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Copy-Item target/release/pixelpal.exe pixelpal.exe
+          $notes = git log -1 --pretty=%B
+          gh release create "v$env:VERSION" pixelpal.exe --title "PixelPal $env:VERSION" --notes "$notes" --target $env:GITHUB_SHA

@@ -672,13 +672,25 @@ mod tests {
         Ecran { id, nom: format!("E{id}"), x, y, r: x + w, b: y + h, sol: y + h - 48.0, gx: x, dx: x + w, principal: id == 0 }
     }
 
-    /// Fait voyager le personnage de l'écran 0 à l'écran `cible` et renvoie les animations vues.
-    fn voyage(ecrans: Vec<Ecran>, cible: usize) -> (Monde, Vec<&'static str>) {
+    /// Personnage visible au milieu de l'écran principal, sans entrée par portail ni promenade en cours.
+    fn pret(ecrans: Vec<Ecran>) -> Monde {
         let mut m = Monde::new("Test", "aventurier");
         m.definir_ecrans(ecrans, 1.0);
-        for _ in 0..200 { m.maj(0.05); } // sortie du portail d'arrivée
+        m.objets.clear();
+        let e = m.ecran(0).clone();
+        let a = m.moi();
+        a.file.clear();
+        a.action = None;
+        a.visible = true;
+        a.occupe = false;
+        a.x = (e.gx + e.dx) / 2.0;
+        m
+    }
+
+    /// Fait voyager le personnage de l'écran 0 à l'écran `cible` et renvoie les animations vues.
+    fn voyage(ecrans: Vec<Ecran>, cible: usize) -> (Monde, Vec<&'static str>) {
+        let mut m = pret(ecrans);
         let ai = m.index(MOI).unwrap();
-        m.interrompre(ai);
         m.aller_a(ai, cible);
         let mut anims = vec![];
         for _ in 0..4000 {
@@ -763,9 +775,7 @@ mod tests {
 
     #[test]
     fn livraison_et_visiteur() {
-        let mut m = Monde::new("Test", "aventurier");
-        m.definir_ecrans(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0)], 1.0);
-        for _ in 0..100 { m.maj(0.05); }
+        let mut m = pret(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0)]);
         m.envoyer_lettre(1);
         let mut envoye = false;
         for _ in 0..400 {
