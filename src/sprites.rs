@@ -62,11 +62,11 @@ pub fn palette(look: &str) -> Palette {
 
 // ---------- poses ----------
 #[derive(Clone, Copy, PartialEq)]
-pub enum Yeux { Ouverts, Fermes, Haut }
+pub enum Yeux { Ouverts, Fermes, Haut, Croix, Contents }
 #[derive(Clone, Copy, PartialEq)]
 pub enum Bouche { Neutre, O, Sourire }
 #[derive(Clone, Copy, PartialEq)]
-pub enum Objet { Rien, Lettre, Pelle, Marteau }
+pub enum Objet { Rien, Lettre, Pelle, Marteau, Pomme, Baie, Champi }
 
 #[derive(Clone, Copy)]
 pub struct Pose {
@@ -154,6 +154,16 @@ fn tete(t: &mut Toile, p: &Palette, u: f32, pose: &Pose) {
     px(t, p.skin, 24.0, y + 4.0, 1, 1); // nez
     match pose.yeux {
         Yeux::Fermes => { px(t, p.eye, 20.0, y + 4.0, 1, 1); px(t, p.eye, 22.0, y + 4.0, 1, 1); }
+        Yeux::Croix => {
+            // yeux en croix (KO)
+            for (dx, dy) in [(0.0, 0.0), (2.0, 0.0), (1.0, 1.0), (0.0, 2.0), (2.0, 2.0)] { px(t, p.eye, 19.0 + dx, y + 2.0 + dy, 1, 1); }
+            px(t, p.eye, 23.0, y + 3.0, 1, 1);
+        }
+        Yeux::Contents => {
+            // yeux plissés de bonheur (^ ^)
+            for x in [20.0, 22.0] { px(t, p.eye, x, y + 3.0, 1, 1); }
+            for x in [19.0, 21.0, 23.0] { px(t, p.eye, x, y + 4.0, 1, 1); }
+        }
         _ => {
             let ye = if pose.yeux == Yeux::Haut { y + 2.0 } else { y + 3.0 };
             px(t, p.eye, 20.0, ye, 1, 2); px(t, p.eye, 22.0, ye, 1, 2);
@@ -195,8 +205,37 @@ fn objet(t: &mut Toile, p: &Palette, m: &Main, pose: &Pose) {
             trait_(t, p.wood, m.x + 0.5, m.y + 0.5, m.x + 0.5 + a * 5.0, m.y + 0.5 + b * 5.0, 1);
             px(t, p.metal, m.x + a * 5.0 - 1.0, m.y + b * 5.0 - 1.0, 3, 2);
         }
+        Objet::Pomme | Objet::Baie | Objet::Champi => aliment(t, pose.objet, m.x - 1.0, m.y - 3.0),
         Objet::Rien => {}
     }
+}
+
+/// Petit aliment de 4 × 4 pixels (dans la main, ou en icône).
+fn aliment(t: &mut Toile, o: Objet, x: f32, y: f32) {
+    match o {
+        Objet::Pomme => {
+            px(t, 0xFFD83A2E, x, y + 1.0, 4, 3); px(t, 0xFFD83A2E, x + 1.0, y, 2, 1);
+            px(t, 0xFFFF8A6A, x + 1.0, y + 1.0, 1, 1); px(t, 0xFF6FBF4F, x + 2.0, y - 1.0, 2, 1);
+        }
+        Objet::Baie => {
+            px(t, 0xFFD16BFF, x, y + 1.0, 2, 2); px(t, 0xFF8E4FD8, x + 2.0, y + 2.0, 2, 2);
+            px(t, 0xFFF0C8FF, x, y + 1.0, 1, 1); px(t, 0xFF6FBF4F, x + 1.0, y, 2, 1);
+        }
+        Objet::Champi => {
+            px(t, 0xFF3FB4CC, x, y, 4, 2); px(t, 0xFFBFF6FF, x + 1.0, y, 1, 1);
+            px(t, 0xFFEDE6F5, x + 1.0, y + 2.0, 2, 2);
+        }
+        _ => {}
+    }
+}
+
+/// Icône d'aliment détourée (pour le menu et le panneau).
+pub fn icone_aliment(cle: &str) -> Toile {
+    let o = match cle { "pomme" => Objet::Pomme, "baie" => Objet::Baie, _ => Objet::Champi };
+    let mut t = Toile::new(8, 8);
+    aliment(&mut t, o, 2.0, 3.0);
+    t.contour(0xFF1D1520);
+    t
 }
 
 fn rendre_pose(pose: &Pose, p: &Palette) -> Toile {
@@ -317,8 +356,88 @@ pub fn anims() -> &'static Vec<Anim> {
             Anim { cle: "sit", nom: "Assis", fps: 2.0, boucle: true, poses: [0, 0, 1, 1].iter().enumerate().map(|(i, &ub)| Pose {
                 air: true, by: 9, ub, leg_f: (88.0, 0.0), leg_b: (80.0, 15.0), arm_f: (-35.0, 0.0), arm_b: (-45.0, 0.0),
                 yeux: if i == 3 { Yeux::Fermes } else { Yeux::Ouverts }, ..d() }).collect() },
+            Anim { cle: "dangle", nom: "Suspendu (attrapé au col)", fps: 6.0, boucle: true, poses: (0..4).map(|k| {
+                let s = [0.0, 1.0, 0.0, -1.0][k];
+                Pose { air: true, leg_f: (8.0 + 10.0 * s, 15.0 + 10.0 * s.abs()), leg_b: (-6.0 - 10.0 * s, 20.0), arm_f: (25.0 + 8.0 * s, 10.0),
+                    arm_b: (-20.0 - 8.0 * s, 10.0), bouche: Bouche::O, echarpe: (k % 2) as i32, chapeau_y: -1, ..d() }
+            }).collect() },
+            Anim { cle: "parachute", nom: "Parachute", fps: 3.0, boucle: true, poses: (0..2).map(|k| Pose {
+                air: true, leg_f: (10.0 + 6.0 * k as f32, 20.0), leg_b: (-8.0, 25.0 - 8.0 * k as f32), arm_f: (168.0, -8.0), arm_b: (158.0, 6.0),
+                bouche: Bouche::Sourire, echarpe: k, ..d() }).collect() },
+            manger("eat_pomme", "Manger une pomme", Objet::Pomme),
+            manger("eat_baie", "Manger une baie féerique", Objet::Baie),
+            manger("eat_champi", "Manger un champignon lumineux", Objet::Champi),
+            Anim { cle: "happy", nom: "Content (caresse)", fps: 8.0, boucle: true, poses: (0..4).map(|k| Pose {
+                leg_f: if k % 2 == 0 { (25.0, 50.0) } else { (4.0, 0.0) }, leg_b: if k % 2 == 0 { (-5.0, 45.0) } else { (-4.0, 0.0) },
+                arm_f: (150.0 + 10.0 * (k % 2) as f32, 10.0), arm_b: (140.0, 10.0), yeux: Yeux::Contents, bouche: Bouche::Sourire,
+                echarpe: (k % 2) as i32, ..d() }).collect() },
+            Anim { cle: "faible", nom: "Affamé (affaibli)", fps: 1.5, boucle: true, poses: (0..2).map(|k| Pose {
+                ub: 2, leg_f: (12.0, 25.0), leg_b: (-6.0, 20.0), arm_f: (-2.0, 0.0), arm_b: (4.0, 0.0),
+                yeux: if k == 1 { Yeux::Fermes } else { Yeux::Ouverts }, chapeau_y: 1, ..d() }).collect() },
+            Anim { cle: "ko", nom: "KO (couché)", fps: 1.0, boucle: true, poses: vec![
+                Pose { air: true, leg_f: (20.0, 0.0), leg_b: (-15.0, 0.0), arm_f: (70.0, 20.0), arm_b: (-60.0, 0.0), yeux: Yeux::Croix, bouche: Bouche::O, ..d() },
+            ] },
         ]
     })
+}
+
+fn manger(cle: &'static str, nom: &'static str, objet: Objet) -> Anim {
+    Anim { cle, nom, fps: 4.0, boucle: true, poses: (0..4).map(|k| Pose {
+        arm_f: if k % 2 == 0 { (100.0, 62.0) } else { (85.0, 45.0) }, arm_b: (10.0, 10.0), objet,
+        bouche: if k % 2 == 0 { Bouche::O } else { Bouche::Neutre }, yeux: if k == 3 { Yeux::Contents } else { Yeux::Ouverts },
+        ub: (k % 2) as i32, ..Pose::default() }).collect() }
+}
+
+/// Voile de parachute (rayures rouge et crème) centrée en `x`, bas des suspentes en (`x`, `y`).
+pub fn voile(t: &mut Toile, u: i32, x: i32, y: i32, balancement: f32) {
+    let (l, h) = (18 * u, 9 * u);
+    let haut = y - 16 * u;
+    let dx = (balancement * 2.0 * u as f32) as i32;
+    for j in 0..h / u {
+        let demi = ((1.0 - ((h / u - j) as f32 / (h / u) as f32).powi(2)).sqrt() * l as f32 / u as f32) as i32;
+        let yy = haut + j * u;
+        t.rect(0xFF1D1520, x + dx - (demi + 1) * u, yy, (2 * demi + 2) * u, u);
+        for i in -demi..demi {
+            let bande = ((i + demi) / 3) % 2 == 0;
+            t.rect(if bande { 0xFFD83A2E } else { 0xFFF4E9CF }, x + dx + i * u, yy, u, u);
+        }
+    }
+    t.rect(0xFF1D1520, x + dx - (l / u + 1) * u, haut + h, (2 * (l / u) + 2) * u, u);
+    for (sx, ex) in [(-(l / u) + 1, -2), (-(l / u) / 2, -1), ((l / u) / 2, 1), ((l / u) - 1, 2)] {
+        let (x0, y0, x1, y1) = (x + dx + sx * u, haut + h + u, x + ex * u, y);
+        let n = ((y1 - y0) / u).max(1);
+        for k in 0..=n { t.rect(0xFF3A2414, x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n, u.max(1) / 2 + 1, u.max(1) / 2 + 1); }
+    }
+}
+
+/// Pierre tombale moussue avec « R.I.P. ».
+pub fn tombe(t: &mut Toile, u: i32, x: i32, y: i32) {
+    let (w, h) = (12, 15);
+    let (g, haut) = (x - w / 2 * u, y - h * u);
+    t.rect(0xFF1D1520, g - u, haut + u, (w + 2) * u, h * u);
+    t.rect(0xFF1D1520, g, haut, w * u, u);
+    t.rect(0xFF8A84A8, g, haut + u, w * u, (h - 1) * u);
+    t.rect(0xFFB0AACB, g, haut + u, u, (h - 1) * u);
+    t.rect(0xFF5E5880, g + (w - 1) * u, haut + u, u, (h - 1) * u);
+    for (i, c) in [(2, 0xFF6FBF4F), (3, 0xFF3F6B3A), (9, 0xFF6FBF4F)] { t.rect(c, g + i * u, haut + u, u, u); }
+    // croix
+    t.rect(0xFF4A4466, x - u / 2 - u / 2, haut + 3 * u, u * 2, 7 * u);
+    t.rect(0xFF4A4466, x - 3 * u + u / 2, haut + 5 * u, 5 * u, u * 2);
+    t.rect(0xFF3F6B3A, g - u, y - u, (w + 2) * u, u);
+    t.rect(0xFF6FBF4F, g + 2 * u, y - 2 * u, u, u);
+    t.rect(0xFFFF7AD9, g + (w - 3) * u, y - 2 * u, u, u);
+}
+
+/// Petit cœur rose de 5 × 4 (u pixels par point).
+pub fn coeur(t: &mut Toile, u: i32, x: i32, y: i32, alpha: f32) {
+    let c = (((alpha.clamp(0.0, 1.0) * 255.0) as u32) << 24) | 0x00FF5C8A;
+    for (dx, dy, w) in [(0, 0, 2), (3, 0, 2), (0, 1, 5), (1, 2, 3), (2, 3, 1)] { t.rect(c, x + dx * u, y + dy * u, w * u, u); }
+}
+
+/// Étoile jaune d'étourdissement.
+pub fn etoile(t: &mut Toile, u: i32, x: i32, y: i32) {
+    t.rect(0xFFFFE066, x, y - u, u, 3 * u);
+    t.rect(0xFFFFE066, x - u, y, 3 * u, u);
 }
 
 pub fn anim(cle: &str) -> &'static Anim {

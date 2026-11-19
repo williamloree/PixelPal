@@ -36,12 +36,38 @@ pub fn lancer(port: u16, jeton: String) -> eframe::Result {
     }))
 }
 
+/// Police des boutons et onglets : Segoe UI Semibold (ou la police normale si absente).
+fn gras(taille: f32) -> egui::FontId { egui::FontId::new(taille, egui::FontFamily::Name("gras".into())) }
+
+/// Polices de Windows (Segoe UI) : plus lisibles que la police par défaut d'egui.
+fn polices(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions, FontFamily};
+    let mut f = FontDefinitions::default();
+    let mut gras_famille = vec![];
+    for (nom, fichier) in [("segoe_gras", "seguisb.ttf"), ("segoe", "segoeui.ttf")] {
+        if let Ok(octets) = std::fs::read(format!(r"C:\Windows\Fonts\{fichier}")) {
+            f.font_data.insert(nom.into(), Arc::new(FontData::from_owned(octets)));
+            gras_famille.push(nom.to_string());
+        }
+    }
+    if gras_famille.iter().any(|n| n == "segoe") {
+        f.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "segoe".into());
+    }
+    gras_famille.extend(f.families[&FontFamily::Proportional].clone());
+    f.families.insert(FontFamily::Name("gras".into()), gras_famille);
+    ctx.set_fonts(f);
+}
+
 fn theme(ctx: &egui::Context) {
+    polices(ctx);
+    // toujours sombre, même si Windows est en thème clair
+    ctx.set_theme(egui::ThemePreference::Dark);
     ctx.all_styles_mut(|s| {
         let mut v = egui::Visuals::dark();
         v.panel_fill = c(0xFF151226);
         v.window_fill = c(CARTE);
         v.extreme_bg_color = c(0xFF0E0C1A);
+        v.text_edit_bg_color = Some(c(0xFF0E0C1A));
         v.faint_bg_color = c(0xFF1F1B33);
         v.override_text_color = Some(c(CREME));
         v.hyperlink_color = c(OR);
@@ -67,6 +93,7 @@ fn theme(ctx: &egui::Context) {
         w.active.weak_bg_fill = c(VIOLET);
         w.active.bg_stroke = Stroke::new(1.5, c(OR_CLAIR));
         w.open = w.active;
+        s.visuals = v;
         s.spacing.item_spacing = vec2(8.0, 7.0);
         s.spacing.button_padding = vec2(10.0, 5.0);
         use egui::{FontId, TextStyle};
@@ -79,7 +106,7 @@ fn theme(ctx: &egui::Context) {
 }
 
 #[derive(PartialEq, Clone, Copy)]
-enum Onglet { Message, Groupes, Contacts, Ecrans, Personnage }
+enum Onglet { Message, Soins, Groupes, Contacts, Ecrans, Personnage }
 
 struct Panneau {
     port: u16,
@@ -255,11 +282,10 @@ impl Panneau {
         egui::Frame::new().fill(ca(CARTE, 0.94)).stroke(Stroke::new(2.0, c(PIERRE_CLAIRE))).inner_margin(14.0).corner_radius(0.0)
     }
 
-    /// Gros bouton doré en pixel art.
+    /// Gros bouton doré (texte en Segoe UI Semibold, net).
     fn bouton_or(&mut self, ui: &mut Ui, texte: &str) -> bool {
-        let lab = self.etiquette(ui.ctx(), texte, NUIT);
-        let k = 2.0;
-        let taille = vec2(lab.size()[0] as f32 * k + 36.0, 40.0);
+        let lab = ui.painter().layout_no_wrap(texte.to_string(), gras(16.0), c(NUIT));
+        let taille = vec2(lab.size().x + 40.0, 40.0);
         let (r, rep) = ui.allocate_exact_size(taille, Sense::click());
         let survol = rep.hovered();
         let enfonce = rep.is_pointer_button_down_on();
@@ -279,8 +305,7 @@ impl Panneau {
                 p.rect_filled(Rect::from_center_size(pos2(x, r.min.y - 4.0 - (t * 5.0 + i as f32).sin().abs() * 4.0), vec2(3.0, 3.0)), 0.0, c(OR_CLAIR));
             }
         }
-        let tl = vec2(lab.size()[0] as f32 * k, lab.size()[1] as f32 * k);
-        p.image(lab.id(), Rect::from_center_size(r.center() + vec2(0.0, -1.0), tl), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        p.galley(r.center() - lab.size() / 2.0 + vec2(0.0, -1.0), lab, c(NUIT));
         if survol { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
         rep.clicked()
     }
@@ -288,10 +313,10 @@ impl Panneau {
     /// Onglet en forme de tablette de pierre, avec icône.
     fn tablette(&mut self, ui: &mut Ui, ico: &str, texte: &str, actif: bool) -> bool {
         let coul = if actif { OR } else { CREME };
-        let lab = self.etiquette(ui.ctx(), texte, coul);
+        let lab = ui.painter().layout_no_wrap(texte.to_string(), gras(15.0), c(coul));
         let ic = self.icone(ui.ctx(), ico, coul);
         let k = 2.0;
-        let taille = vec2(lab.size()[0] as f32 * k + ic.size()[0] as f32 * k + 22.0, 42.0);
+        let taille = vec2(lab.size().x + ic.size()[0] as f32 * k + 24.0, 42.0);
         let (r, rep) = ui.allocate_exact_size(taille, Sense::click());
         let survol = rep.hovered();
         let r = if actif { r.translate(vec2(0.0, -2.0)) } else { r };
@@ -310,8 +335,7 @@ impl Panneau {
         let ti = vec2(ic.size()[0] as f32 * k, ic.size()[1] as f32 * k);
         let ri = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - ti.y / 2.0), ti);
         p.image(ic.id(), ri, uv, Color32::WHITE);
-        let tl = vec2(lab.size()[0] as f32 * k, lab.size()[1] as f32 * k);
-        p.image(lab.id(), Rect::from_min_size(pos2(ri.max.x + 4.0, r.center().y - tl.y / 2.0), tl), uv, Color32::WHITE);
+        p.galley(pos2(ri.max.x + 6.0, r.center().y - lab.size().y / 2.0), lab, c(coul));
         if survol { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
         rep.clicked()
     }
@@ -384,7 +408,7 @@ impl Panneau {
             ui.add(egui::TextEdit::multiline(&mut self.texte).hint_text("Écris ta lettre…").desired_rows(5).desired_width(f32::INFINITY).margin(vec2(10.0, 8.0)));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if self.bouton_or(ui, "ENVOYER PAR PORTAIL") {
+                if self.bouton_or(ui, "✉  Envoyer par portail") {
                     let a = if self.tous { Value::Null } else { json!(self.choix.iter().collect::<Vec<_>>()) };
                     let v = json!({"groupe": self.groupe, "a": a, "texte": self.texte});
                     if self.action("envoyer", v, "Ton personnage part livrer la lettre !") { self.texte.clear(); }
@@ -438,7 +462,7 @@ impl Panneau {
                 }
             });
             ui.add_space(6.0);
-            if self.bouton_or(ui, "CRÉER LE GROUPE") {
+            if self.bouton_or(ui, "Créer le groupe") {
                 let v = json!({"nom": self.nom_groupe, "ids": self.choix_groupe.iter().collect::<Vec<_>>()});
                 if self.action("creer_groupe", v, "Groupe créé et envoyé aux membres.") { self.nom_groupe.clear(); self.choix_groupe.clear(); }
             }
@@ -453,14 +477,14 @@ impl Panneau {
             self.titre(ui, "MON CODE D'INVITATION");
             ui.horizontal(|ui| {
                 egui::Frame::new().fill(c(0xFF0E0C1A)).stroke(Stroke::new(1.0, c(OR))).inner_margin(vec2(10.0, 6.0)).show(ui, |ui| {
-                    ui.label(egui::RichText::new(&code).monospace().size(17.0).color(c(OR_CLAIR)));
+                    ui.label(egui::RichText::new(&code).monospace().size(13.0).color(c(OR_CLAIR)));
                 });
                 if ui.button("Copier").clicked() { ui.ctx().copy_text(code.clone()); self.dire("Code copié.".into()); }
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Ajouter un code :");
-                ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("192.168.1.20:47800").desired_width(180.0));
+                ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("colle ici le code de ton collègue").desired_width(300.0));
                 if ui.button("Ajouter").clicked() {
                     let r = self.appeler("ajouter", json!({"code": self.code}));
                     let ok = r["ok"] == true;
@@ -469,7 +493,7 @@ impl Panneau {
                     self.rafraichir.store(true, Ordering::Relaxed);
                 }
             });
-            ui.small("Sur le même réseau, les PixelPal se trouvent tout seuls. Sinon (VPN, autre site), échangez vos codes.");
+            ui.small("Sur le même réseau, les PixelPal se trouvent tout seuls. Ailleurs (télétravail, 4G, autre site), envoie ce code à ton collègue : il marche partout, la connexion passe à travers les box.");
         });
         self.ornements(ui.painter(), rep.response.rect);
         ui.add_space(10.0);
@@ -485,7 +509,7 @@ impl Panneau {
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(ct["nom"].as_str().unwrap_or("?")).strong().color(c(OR)));
                         let etat = if ct["en_ligne"] == true { egui::RichText::new("● en ligne").color(c(0xFF7CE08A)) } else { egui::RichText::new("○ absent").color(c(0xFF8A82A8)) };
-                        ui.horizontal(|ui| { ui.label(etat); ui.weak(format!("{}:{}", ct["host"].as_str().unwrap_or(""), ct["port"])); });
+                        ui.horizontal(|ui| { ui.label(etat); let ch = ct["chemin"].as_str().unwrap_or(""); if !ch.is_empty() { ui.weak(if ch == "direct" { "liaison directe" } else { "par relais" }); } });
                     });
                 });
             }
@@ -546,6 +570,95 @@ impl Panneau {
         self.ornements(ui.painter(), rep.response.rect);
     }
 
+    /// Jauge horizontale (0 à 100).
+    fn jauge(ui: &mut Ui, nom: &str, v: f32, coul: u32) {
+        ui.horizontal(|ui| {
+            ui.add_sized([62.0, 18.0], egui::Label::new(egui::RichText::new(nom).color(c(CREME))));
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(260.0) - 50.0, 16.0), Sense::hover());
+            let p = ui.painter();
+            p.rect_filled(r, 0.0, c(NUIT));
+            let inter = r.shrink(2.0);
+            p.rect_filled(inter, 0.0, c(0xFF3C3656));
+            let coul = if v < 25.0 { 0xFFE0533E } else { coul };
+            let plein = Rect::from_min_size(inter.min, vec2(inter.width() * (v / 100.0).clamp(0.0, 1.0), inter.height()));
+            p.rect_filled(plein, 0.0, c(coul));
+            p.rect_filled(Rect::from_min_size(plein.min, vec2(plein.width(), 3.0)), 0.0, ca(0xFFFFFFFF, 0.3));
+            ui.label(egui::RichText::new(format!("{:.0} %", v)).color(c(LAVANDE)));
+        });
+    }
+
+    fn onglet_soins(&mut self, ui: &mut Ui) {
+        let s = self.etat["soins"].clone();
+        let f = |k: &str| s[k].as_f64().unwrap_or(0.0) as f32;
+        let mort = s["mort"] == true;
+        let rep = Self::cadre().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            self.titre(ui, "MON COMPAGNON");
+            ui.horizontal(|ui| {
+                let look = self.look.clone();
+                let anim = if mort { "ko" } else if f("satiete") < 25.0 { "faible" } else if f("joie") > 70.0 { "happy" } else { "idle" };
+                self.estrade(ui, &look, anim, 112.0);
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    let humeur = self.etat["humeur"].as_str().unwrap_or("");
+                    ui.label(egui::RichText::new(humeur).font(gras(18.0)).color(c(if mort { LAVANDE } else { OR })));
+                    ui.label(egui::RichText::new(format!("Âge : {}  ·  record : {}", self.etat["age"].as_str().unwrap_or("-"), self.etat["record"].as_str().unwrap_or("-"))).color(c(LAVANDE)));
+                    ui.add_space(4.0);
+                    Self::jauge(ui, "Ventre", f("satiete"), 0xFFF2C14E);
+                    Self::jauge(ui, "Santé", f("sante"), 0xFF7CE08A);
+                    Self::jauge(ui, "Joie", f("joie"), 0xFFFF7AD9);
+                });
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if mort {
+                    if self.bouton_or(ui, "Ressusciter") { self.action("ressusciter", json!({}), "Il revient à la vie !"); }
+                } else if ui.button("♥  Caresser").clicked() {
+                    self.action("caresser", json!({}), "Il est ravi.");
+                }
+            });
+            ui.small("Il a faim toutes les 3 h environ (seulement quand l'appli est ouverte). Sans manger pendant ~12 h, il meurt… Clic sur le personnage : menu de soins.");
+        });
+        self.ornements(ui.painter(), rep.response.rect);
+        ui.add_space(10.0);
+        let rep = Self::cadre().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            self.titre(ui, "RÉSERVE");
+            for (cle, nom) in crate::soins::ALIMENTS {
+                let n = s[cle].as_u64().unwrap_or(0);
+                let (ventre, joie, sante) = crate::soins::effet(cle);
+                ui.horizontal(|ui| {
+                    let tex = self.icone_aliment(ui.ctx(), cle);
+                    ui.add(egui::Image::new(&tex).fit_to_exact_size(vec2(32.0, 32.0)));
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(format!("{nom}  ×{n}")).font(gras(15.0)).color(c(if n > 0 { CREME } else { 0xFF8A82A8 })));
+                        let mut effets = vec![format!("+{ventre:.0} ventre")];
+                        if joie > 0.0 { effets.push(format!("+{joie:.0} joie")); }
+                        if sante > 0.0 { effets.push(format!("+{sante:.0} santé")); }
+                        ui.small(effets.join(" · "));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(n > 0 && !mort, egui::Button::new("Donner")).clicked() {
+                            self.action("nourrir", json!({"cle": cle}), "Miam !");
+                        }
+                    });
+                });
+            }
+            ui.separator();
+            ui.label(format!("Parachutes : {} / 3", s["parachutes"].as_u64().unwrap_or(0)));
+            ui.small("Le jardin donne un aliment toutes les 40 min d'utilisation, l'atelier plie un parachute toutes les 2 h. Sans parachute, une grande chute fait mal !");
+        });
+        self.ornements(ui.painter(), rep.response.rect);
+    }
+
+    fn icone_aliment(&mut self, ctx: &egui::Context, cle: &str) -> TextureHandle {
+        let k = (format!("#{cle}"), 0);
+        if let Some(t) = self.etiquettes.get(&k) { return t.clone(); }
+        let t = Self::charger(ctx, &format!("aliment-{cle}"), &sprites::icone_aliment(cle), TextureOptions::NEAREST);
+        self.etiquettes.insert(k, t.clone());
+        t
+    }
+
     fn onglet_personnage(&mut self, ui: &mut Ui) {
         let rep = Self::cadre().show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -566,12 +679,28 @@ impl Panneau {
                         }
                     });
                     ui.add_space(4.0);
-                    if self.bouton_or(ui, "ENREGISTRER") {
+                    if self.bouton_or(ui, "Enregistrer") {
                         let v = json!({"nom": self.nom, "look": self.look});
                         self.action("profil", v, "Profil enregistré.");
                     }
                 });
             });
+        });
+        self.ornements(ui.painter(), rep.response.rect);
+        ui.add_space(10.0);
+        let rep = Self::cadre().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            self.titre(ui, "COMPORTEMENT");
+            let mut derriere = self.etat["options"]["devant"] != true;
+            let mut fenetres = self.etat["options"]["fenetres"] != false;
+            if ui.checkbox(&mut derriere, "Rester derrière les fenêtres (au niveau du bureau)").changed() {
+                self.action("options", json!({"devant": !derriere}), if derriere { "Il reste sur le bureau, derrière tes applis." } else { "Il passe devant les fenêtres." });
+            }
+            ui.small("Les visiteurs qui t'apportent une lettre restent toujours visibles.");
+            if ui.checkbox(&mut fenetres, "Marcher sur le dessus des fenêtres ouvertes").changed() {
+                self.action("options", json!({"fenetres": fenetres}), "C'est noté.");
+            }
+            ui.small("Jamais sur la fenêtre active : il ne vient pas déranger l'appli que tu utilises.");
         });
         self.ornements(ui.painter(), rep.response.rect);
         ui.add_space(10.0);
@@ -641,8 +770,8 @@ impl eframe::App for Panneau {
             ui.add_space(14.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 8.0);
-                for (o, ico, n) in [(Onglet::Message, "lettre", "LETTRE"), (Onglet::Groupes, "groupe", "GROUPES"), (Onglet::Contacts, "lien", "CONTACTS"),
-                    (Onglet::Ecrans, "ecran", "ÉCRANS"), (Onglet::Personnage, "chapeau", "PERSO")] {
+                for (o, ico, n) in [(Onglet::Message, "lettre", "Lettre"), (Onglet::Soins, "coeur", "Soins"), (Onglet::Groupes, "groupe", "Groupes"), (Onglet::Contacts, "lien", "Contacts"),
+                    (Onglet::Ecrans, "ecran", "Écrans"), (Onglet::Personnage, "chapeau", "Perso")] {
                     if self.tablette(ui, ico, n, self.onglet == o) { self.onglet = o; }
                 }
             });
@@ -663,6 +792,7 @@ impl eframe::App for Panneau {
                     Onglet::Contacts => self.onglet_contacts(ui),
                     Onglet::Ecrans => self.onglet_ecrans(ui),
                     Onglet::Personnage => self.onglet_personnage(ui),
+                    Onglet::Soins => self.onglet_soins(ui),
                 }
                 ui.add_space(10.0);
             });

@@ -3,19 +3,23 @@
 mod config;
 mod fenetres;
 mod maj;
+mod menu;
 mod monde;
+mod pair;
 mod panneau;
 mod reseau;
 mod scene;
+mod soins;
 mod sprites;
 mod toile;
 
 use config::{Config, Groupe, Membre};
 use fenetres::Calque;
+use menu::Menu;
 use monde::{Monde, MOI, Sortie, TypeObjet};
 use reseau::{Evt, Identite, Reseau};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -100,14 +104,37 @@ fn heure() -> String {
     format!("{:02}:{:02} UTC", s / 3600 % 24, s / 60 % 60)
 }
 
+/// Passage à iroh : l'identifiant devient le code d'invitation. Les anciens contacts (adresse:port)
+/// ne sont plus joignables ; on les retire des contacts et des groupes.
+fn migrer_identite(cfg: &mut Config, code: &str) {
+    if cfg.id == code { return; }
+    let ancien = std::mem::replace(&mut cfg.id, code.to_string());
+    cfg.contacts.retain(|m| reseau::code_valide(&m.id));
+    for g in &mut cfg.groupes {
+        for m in &mut g.membres { if m.id == ancien { m.id = code.to_string(); } }
+        g.membres.retain(|m| reseau::code_valide(&m.id));
+    }
+    cfg.groupes.retain(|g| g.membres.len() > 1);
+    cfg.sauver();
+}
+
+/// Le personnage est tenu (ou sur le point de l'être) à la souris.
+struct Saisie { id: u64, x0: f32, y0: f32, glisse: bool, trace: VecDeque<(Instant, f32, f32)> }
+
 fn lancer(profil: Option<String>) {
     let apres_maj = std::env::args().any(|a| a == "--apres-maj");
     if !fenetres::verrou_instance(&profil, apres_maj) { return; } // déjà lancé pour ce profil
     maj::nettoyer();
     let cfg = Config::charger(&profil);
-    let jeton = config::id_aleatoire();
+    // jeton du canal local du panneau ; PIXELPAL_JETON le fixe (tests automatiques)
+    let jeton = std::env::var("PIXELPAL_JETON").ok().filter(|j| j.len() >= 8).unwrap_or_else(config::id_aleatoire);
     let (tx, rx) = channel::<Evt>();
-    let reseau = Reseau::demarrer(Identite { id: cfg.id.clone(), nom: cfg.nom.clone(), look: cfg.look.clone() }, &cfg.contacts, jeton.clone(), tx, apres_maj);
+    let mut cfg = cfg;
+    let reseau = match Reseau::demarrer(&config::dossier(&profil), Identite { id: cfg.id.clone(), nom: cfg.nom.clone(), look: cfg.look.clone() }, &cfg.contacts, jeton.clone(), tx) {
+        Ok(r) => r,
+        Err(e) => { fenetres::alerte(&format!("PixelPal ne peut pas démarrer son réseau : {e}")); return; }
+    };
+    migrer_identite(&mut cfg, &reseau.code());
     let (tx_res, rx_res) = channel::<String>();
     let etat_maj = Arc::new(Mutex::new(String::new()));
     let (verifier_maj, demande_maj) = channel::<()>();
@@ -118,6 +145,8 @@ fn lancer(profil: Option<String>) {
     fenetres::initialiser();
     let icone = fenetres::Icone::new();
     let mut monde = Monde::new(&cfg.nom, &cfg.look);
+    monde.soins = cfg.soins.clone();
+    if let Some(v) = std::env::var("PIXELPAL_VITESSE_SOINS").ok().and_then(|v| v.parse().ok()) { monde.vitesse_soins = v; }
     let (ecrans, k) = fenetres::ecrans();
     monde.definir_ecrans(ecrans, k);
     if apres_maj { monde.dire(MOI, &format!("Me revoilà, en version {} !", maj::VERSION), 5.0); }
@@ -127,19 +156,58 @@ fn lancer(profil: Option<String>) {
     let mut calques: HashMap<String, Calque> = HashMap::new();
     let mut dernier = Instant::now();
     let mut verif_ecrans = Instant::now();
-    let mut sauvegarde_contacts = Instant::now();
+    let mut verif_fenetres = Instant::now();
+    let mut sauvegarde = Instant::now();
+    let mut saisie: Option<Saisie> = None;
+    let mut menu: Option<Menu> = None;
 
     while fenetres::pomper() && !app.quitter {
         let debut = Instant::now();
         let dt = dernier.elapsed().as_secs_f32().min(0.1);
         dernier = debut;
+        let u = app.monde.u();
 
         // clics sur les fenêtres
-        let clics: Vec<isize> = std::mem::take(&mut *fenetres::CLICS.lock().unwrap());
-        for h in clics {
+        let clics: Vec<(isize, i32, i32)> = std::mem::take(&mut *fenetres::CLICS.lock().unwrap());
+        for (h, cx, cy) in clics {
             if h == icone.hwnd.0 as isize { app.ouvrir_panneau(); continue; }
-            if let Some((cle, _)) = calques.iter().find(|(_, c)| c.hwnd.0 as isize == h) {
-                if let Ok(id) = cle[1..].parse::<u64>() { app.monde.clic(id); }
+            if calques.get("menu").is_some_and(|c| c.hwnd.0 as isize == h) {
+                let choix = menu.as_ref().and_then(|m| m.choix_a(cy / Menu::echelle(u)).and_then(|i| m.choix.get(i)).map(|c| c.cle));
+                if let Some(cle) = choix { menu = None; app.action_menu(cle); }
+                continue;
+            }
+            let _ = cx;
+            menu = None; // un clic ailleurs referme le menu
+            let Some((cle, _)) = calques.iter().find(|(_, c)| c.hwnd.0 as isize == h) else { continue };
+            let Ok(id) = cle[1..].parse::<u64>() else { continue };
+            if cle.starts_with('a') && id == MOI {
+                // clic ou prise : on décidera au relâchement
+                let (x, y) = fenetres::curseur();
+                saisie = Some(Saisie { id, x0: x, y0: y, glisse: false, trace: VecDeque::new() });
+            } else {
+                app.monde.clic(id);
+            }
+        }
+
+        // personnage tenu à la souris : il suit le curseur, puis il est lâché (et peut être lancé)
+        if let Some(s) = &mut saisie {
+            let (x, y) = fenetres::curseur();
+            s.trace.push_back((Instant::now(), x, y));
+            while s.trace.len() > 2 && s.trace[0].0.elapsed() > Duration::from_millis(90) { s.trace.pop_front(); }
+            if !s.glisse && ((x - s.x0).powi(2) + (y - s.y0).powi(2)).sqrt() > 6.0 * app.monde.k {
+                s.glisse = app.monde.saisir(s.id);
+                if s.glisse { menu = None; }
+            }
+            if s.glisse { app.monde.tenir(s.id, x, y); }
+            if !fenetres::bouton_gauche() {
+                if s.glisse {
+                    let (t0, x0, y0) = s.trace[0];
+                    let duree = t0.elapsed().as_secs_f32().max(0.016);
+                    app.monde.lacher(s.id, (x - x0) / duree, (y - y0) / duree);
+                } else {
+                    app.monde.clic(s.id);
+                }
+                saisie = None;
             }
         }
 
@@ -151,6 +219,12 @@ fn lancer(profil: Option<String>) {
             let pareil = e.len() == app.monde.ecrans.len() && e.iter().zip(&app.monde.ecrans).all(|(a, b)| a.x == b.x && a.y == b.y && a.r == b.r && a.b == b.b && a.sol == b.sol);
             if !pareil { app.monde.definir_ecrans(e, k); }
         }
+        // fenêtres ouvertes sur lesquelles il peut marcher
+        if verif_fenetres.elapsed() > Duration::from_millis(250) {
+            verif_fenetres = Instant::now();
+            let p = if app.cfg.fenetres { fenetres::plateformes() } else { vec![] };
+            app.monde.definir_plateformes(p);
+        }
 
         while let Ok(evt) = rx.try_recv() { app.evenement(evt); }
         while let Ok(r) = rx_res.try_recv() { app.monde.resultat_envoi(r); }
@@ -160,23 +234,31 @@ fn lancer(profil: Option<String>) {
         }
         if relance.is_some_and(|r| Instant::now() >= r) { app.quitter = true; }
         if *fenetres::QUITTER.lock().unwrap() { app.quitter = true; }
-        if sauvegarde_contacts.elapsed() > Duration::from_secs(20) { sauvegarde_contacts = Instant::now(); app.sauver_contacts(); }
+        if sauvegarde.elapsed() > Duration::from_secs(30) { sauvegarde = Instant::now(); app.sauver(); }
 
         app.monde.maj(dt);
         for s in std::mem::take(&mut app.monde.sorties) {
             match s {
-                Sortie::OuvrirPanneau => app.ouvrir_panneau(),
+                Sortie::Menu(id) => {
+                    let nom = app.cfg.nom.clone();
+                    menu = if menu.as_ref().is_some_and(|m| m.acteur == id) { None } else { Some(Menu::new(id, &nom, &app.monde.soins)) };
+                }
                 Sortie::Envoyer(n) => app.lancer_envoi(n, tx_res.clone()),
                 Sortie::AccuserLecture(m) => app.accuser_lecture(m),
             }
         }
+        // le menu suit le personnage, se met à jour, et se referme tout seul
+        if let Some(m) = &mut menu {
+            let tenu = app.monde.acteurs.iter().any(|a| a.id == m.acteur && a.porte);
+            if tenu || m.ouvert.elapsed() > Duration::from_secs(15) { menu = None; } else { m.maj(&app.monde.soins); }
+        }
 
-        dessiner(&app.monde, &mut sprites, &mut calques);
+        dessiner(&app.monde, &mut sprites, &mut calques, menu.as_mut(), app.cfg.devant);
 
         let ecoule = debut.elapsed();
         if ecoule < Duration::from_millis(33) { std::thread::sleep(Duration::from_millis(33) - ecoule); }
     }
-    app.sauver_contacts();
+    app.sauver();
     if let Some(mut p) = app.panneau.take() { let _ = p.kill(); }
     if relance.is_some() {
         drop(calques);
@@ -185,10 +267,54 @@ fn lancer(profil: Option<String>) {
     }
 }
 
-/// Met à jour les petites fenêtres : décors d'abord, puis personnages, puis bulles (ordre d'empilement).
-fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<String, Calque>) {
+/// Toile d'un personnage (avec voile de parachute, étoiles, cœurs) et point d'ancrage des pieds dans la toile.
+fn toile_acteur(a: &monde::Acteur, sprites: &mut sprites::Sprites, u: i32, temps: f32) -> (Toile, i32, i32) {
+    let mut t = Toile::new(60 * u, 80 * u);
+    let mut img = sprites.image(&a.look, a.anim, a.anim_t).clone();
+    if a.fantome { img = img.fantome(0.55); }
+    let (cx, uf) = (30 * u, u as f32);
+    let miroir = a.sens < 0;
+    if a.renverse {
+        // au plafond : image retournée, la semelle collée au bord du haut
+        t.coller(&img.retourner_v(), (cx - sprites::CX * u) as f32, (3 * u) as f32, uf, miroir, 1.0);
+        return (t, cx, 4 * u);
+    }
+    let pied = 76 * u;
+    let etoiles = |t: &mut Toile, hx: i32, hy: i32| for i in 0..3 {
+        let ang = temps * 4.0 + i as f32 * 2.1;
+        sprites::etoile(t, u, hx + (ang.cos() * 7.0 * uf) as i32, hy + (ang.sin() * 2.5 * uf) as i32);
+    };
+    if a.couche {
+        // allongé sur le dos (KO) ; tête du côté opposé aux pieds
+        t.coller(&img.pivoter_gauche(), (cx - 20 * u) as f32, (pied - 28 * u) as f32, uf, miroir, 1.0);
+        if a.etoiles > 0.0 {
+            let hx = if miroir { cx + 20 * u - 13 * u } else { cx - 20 * u + 13 * u };
+            etoiles(&mut t, hx, pied - 17 * u);
+        }
+        return (t, cx, pied);
+    }
+    let k = uf * a.echelle;
+    let flotte = if a.fantome { ((temps * 2.0).sin() * 3.0 + 8.0) * uf } else { 0.0 };
+    t.coller(&img, cx as f32 - sprites::CX as f32 * k, pied as f32 - (sprites::BAS + 1) as f32 * k - flotte, k, miroir, 1.0);
+    if a.parachute { sprites::voile(&mut t, u, cx, pied - 30 * u, (temps * 2.0).sin()); }
+    if a.etoiles > 0.0 { etoiles(&mut t, cx, pied - 38 * u); }
+    if a.coeurs > 0.0 {
+        for i in 0..3 {
+            let ph = ((2.5 - a.coeurs) * 0.8 + i as f32 * 0.33).rem_euclid(1.0);
+            let x = cx + ((ph * 6.0 + i as f32).sin() * 6.0 * uf) as i32 - 2 * u;
+            sprites::coeur(&mut t, u, x, pied - 40 * u - (ph * 18.0 * uf) as i32, 1.0 - ph);
+        }
+    }
+    (t, cx, pied)
+}
+
+/// Met à jour les petites fenêtres. Le personnage vit derrière les fenêtres des applis (au niveau du bureau),
+/// sauf option « devant » ou quand on le tient ; les visiteurs et le menu restent toujours visibles.
+fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<String, Calque>, menu: Option<&mut Menu>, devant_opt: bool) {
     let u = m.u();
     let mut vus = HashSet::new();
+    let (mut devant, mut derriere_decor, mut derriere_perso, mut derriere_bulles) = (vec![], vec![], vec![], vec![]);
+    let moi_devant = devant_opt || m.acteurs.iter().any(|a| a.id == MOI && a.porte);
     for o in &m.objets {
         let cle = format!("o{}", o.id);
         let (gauche, haut, t) = match o.t {
@@ -210,36 +336,67 @@ fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<Str
                 sprites::portail(&mut t, u, o.x as i32 - g, o.y as i32 - h, o.p, m.temps);
                 (g, h, t)
             }
+            TypeObjet::Tombe => {
+                let (g, h) = (o.x as i32 - 8 * u, o.y as i32 - 17 * u);
+                let mut t = Toile::new(16 * u, 18 * u);
+                sprites::tombe(&mut t, u, 8 * u, 17 * u);
+                (g, h, t)
+            }
         };
         let mut t = t;
         let a = o.alpha();
         if a < 1.0 { for p in &mut t.px { *p = (*p & 0x00FF_FFFF) | ((((*p >> 24) as f32 * a) as u32) << 24); } }
-        calques.entry(cle.clone()).or_insert_with(|| Calque::new(false)).afficher(&t, gauche, haut);
+        let c = calques.entry(cle.clone()).or_insert_with(|| Calque::new(false));
+        c.afficher(&t, gauche, haut);
+        if moi_devant { devant.push(c.hwnd) } else { derriere_decor.push(c.hwnd) }
         vus.insert(cle);
     }
-    let (w, h, cx, bas) = (sprites::W * u, sprites::H * u, sprites::CX * u, (sprites::BAS + 1) * u);
     for a in &m.acteurs {
         if !a.visible || a.echelle < 0.02 { continue; }
         let cle = format!("a{}", a.id);
-        let mut t = Toile::new(w, h);
-        let img = sprites.image(&a.look, a.anim, a.anim_t);
-        let k = u as f32 * a.echelle;
-        t.coller(img, cx as f32 - sprites::CX as f32 * k, bas as f32 - (sprites::BAS + 1) as f32 * k, k, a.sens < 0, 1.0);
-        calques.entry(cle.clone()).or_insert_with(|| Calque::new(true)).afficher(&t, a.x as i32 - cx, a.y as i32 - bas);
+        let (t, ax, ay) = toile_acteur(a, sprites, u, m.temps);
+        let c = calques.entry(cle.clone()).or_insert_with(|| Calque::new(true));
+        c.afficher(&t, a.x as i32 - ax, a.y as i32 - ay);
+        if a.visiteur || moi_devant { devant.insert(0, c.hwnd) } else { derriere_perso.push(c.hwnd) }
         vus.insert(cle);
     }
     for a in &m.acteurs {
-        if !a.visible || a.echelle < 0.6 { continue; }
+        if !a.visible || a.echelle < 0.6 || a.renverse { continue; }
         let (titre, texte, indice) = match &a.bulle {
             Some(b) => (b.titre.clone(), b.texte.clone(), if b.cliquable { "(clic pour fermer)".to_string() } else { String::new() }),
             None if a.visiteur => (a.nom.clone(), String::new(), String::new()),
             None => continue,
         };
         let cle = format!("b{}", a.id);
-        calques.entry(cle.clone()).or_insert_with(|| Calque::new(true)).bulle(&titre, &texte, &indice, a.x as i32, a.y as i32 - 35 * u, m.k);
+        let decal = if a.couche { 16 } else if a.fantome { 46 } else if a.parachute { 50 } else { 35 };
+        let c = calques.entry(cle.clone()).or_insert_with(|| Calque::new(true));
+        c.bulle(&titre, &texte, &indice, a.x as i32, a.y as i32 - decal * u, m.k);
+        if a.visiteur || moi_devant { devant.insert(0, c.hwnd) } else { derriere_bulles.push(c.hwnd) }
         vus.insert(cle);
     }
+    if let Some(menu) = menu {
+        if let Some(a) = m.acteurs.iter().find(|a| a.id == menu.acteur) {
+            let c = calques.entry("menu".into()).or_insert_with(|| Calque::new(true));
+            // survol : la ligne sous le curseur s'allume
+            let (sx, sy) = fenetres::curseur();
+            let km = Menu::echelle(u);
+            let (w, h) = (Menu::largeur() * km, menu.hauteur() * km);
+            let e = m.ecran(a.ecran);
+            let mut x = a.x as i32 + 14 * u;
+            if x + w > e.r as i32 { x = a.x as i32 - 14 * u - w; }
+            let y = (a.y as i32 - 30 * u - h / 2).clamp(e.y as i32, (e.b as i32 - h).max(e.y as i32));
+            menu.survol = if (sx as i32) >= x && (sx as i32) < x + w { menu.choix_a((sy as i32 - y) / km) } else { None };
+            let mut t = Toile::new(w, h);
+            t.coller(&menu.rendre(), 0.0, 0.0, km as f32, false, 1.0);
+            c.afficher(&t, x, y);
+            devant.insert(0, c.hwnd);
+            vus.insert("menu".to_string());
+        }
+    }
     calques.retain(|c, _| vus.contains(c));
+    // ordre derrière : bulles au-dessus du personnage, lui-même au-dessus de ses échelles
+    let derriere: Vec<_> = derriere_bulles.into_iter().chain(derriere_perso).chain(derriere_decor).collect();
+    fenetres::empiler(&devant, &derriere);
 }
 
 impl Appli {
@@ -253,16 +410,34 @@ impl Appli {
             .spawn().ok();
     }
 
+    /// Enregistre les soins et les contacts.
+    fn sauver(&mut self) {
+        self.cfg.soins = self.monde.soins.clone();
+        self.sauver_contacts();
+        self.cfg.sauver();
+    }
+
+    /// Choix fait dans le menu de soins.
+    fn action_menu(&mut self, cle: &str) {
+        let r = match cle {
+            "panneau" => { self.ouvrir_panneau(); Ok(()) }
+            "caresser" => self.monde.caresser(),
+            "ressusciter" => self.monde.ressusciter(),
+            aliment => self.monde.nourrir(aliment),
+        };
+        if let Err(e) = r { self.monde.dire(MOI, &e, 3.5); } else { self.sauver(); }
+    }
+
     fn sauver_contacts(&mut self) {
         let c = self.reseau.contacts.lock().unwrap();
-        let mut v: Vec<Membre> = c.values().filter(|c| !c.host.is_empty()).map(|c| Membre { id: c.id.clone(), nom: c.nom.clone(), host: c.host.clone(), port: c.port }).collect();
+        let mut v: Vec<Membre> = c.values().filter(|c| !c.nom.is_empty()).map(|c| Membre { id: c.id.clone(), nom: c.nom.clone(), host: String::new(), port: 0 }).collect();
         drop(c);
         v.sort_by(|a, b| a.nom.cmp(&b.nom));
         let changes = v.len() != self.cfg.contacts.len() || v.iter().zip(&self.cfg.contacts).any(|(a, b)| a.id != b.id || a.host != b.host || a.port != b.port || a.nom != b.nom);
         if changes { self.cfg.contacts = v; self.cfg.sauver(); }
     }
 
-    fn moi_membre(&self) -> Membre { Membre { id: self.cfg.id.clone(), nom: self.cfg.nom.clone(), host: String::new(), port: self.reseau.port } }
+    fn moi_membre(&self) -> Membre { Membre { id: self.cfg.id.clone(), nom: self.cfg.nom.clone(), host: String::new(), port: 0 } }
 
     fn ecran_du_curseur(&self) -> usize {
         let (x, y) = fenetres::curseur();
@@ -292,7 +467,7 @@ impl Appli {
                 {
                     let mut c = self.reseau.contacts.lock().unwrap();
                     for m in g.membres.iter().filter(|m| m.id != self.cfg.id && !m.host.is_empty()) {
-                        c.entry(m.id.clone()).or_insert(reseau::Contact { id: m.id.clone(), nom: m.nom.clone(), host: m.host.clone(), port: m.port, look: String::new(), vu: None });
+                        c.entry(m.id.clone()).or_insert(reseau::Contact { id: m.id.clone(), nom: m.nom.clone(), look: String::new(), vu: None, chemin: String::new() });
                     }
                 }
                 self.monde.dire(MOI, &format!("{de} m'a ajouté au groupe « {} ».", g.nom), 5.0);
@@ -329,14 +504,14 @@ impl Appli {
                 if ids.is_empty() { return json!({"ok": false, "erreur": "choisis au moins un contact"}); }
                 let c = self.reseau.contacts.lock().unwrap();
                 let mut membres = vec![self.moi_membre()];
-                membres.extend(ids.iter().filter_map(|id| c.get(id)).map(|c| Membre { id: c.id.clone(), nom: c.nom.clone(), host: c.host.clone(), port: c.port }));
+                membres.extend(ids.iter().filter_map(|id| c.get(id)).map(|c| Membre { id: c.id.clone(), nom: c.nom.clone(), host: String::new(), port: 0 }));
                 drop(c);
                 let g = Groupe { id: config::id_aleatoire(), nom, membres };
                 self.cfg.groupes.push(g.clone());
                 self.cfg.sauver();
                 for m in g.membres.iter().skip(1).cloned() {
                     let (r, g2) = (self.reseau.clone(), g.clone());
-                    std::thread::spawn(move || { let (h, p) = r.adresse(&m); let _ = r.envoyer_a(&h, p, json!({"type": "groupe", "groupe": g2}), Duration::from_secs(3)); });
+                    std::thread::spawn(move || { let _ = r.envoyer_a(&m.id, json!({"type": "groupe", "groupe": g2})); });
                 }
                 json!({"ok": true})
             }
@@ -377,6 +552,20 @@ impl Appli {
                 }
                 json!({"ok": true})
             }
+            "nourrir" | "caresser" | "ressusciter" => {
+                let r = match v["cmd"].as_str().unwrap_or("") {
+                    "caresser" => self.monde.caresser(),
+                    "ressusciter" => self.monde.ressusciter(),
+                    _ => self.monde.nourrir(v["cle"].as_str().unwrap_or("")),
+                };
+                match r { Ok(()) => { self.sauver(); json!({"ok": true}) } Err(e) => json!({"ok": false, "erreur": e}) }
+            }
+            "options" => {
+                if let Some(b) = v["devant"].as_bool() { self.cfg.devant = b; }
+                if let Some(b) = v["fenetres"].as_bool() { self.cfg.fenetres = b; }
+                self.cfg.sauver();
+                json!({"ok": true})
+            }
             "quitter" => { self.quitter = true; json!({"ok": true}) }
             "maj" => {
                 if !maj::active() { return json!({"ok": false, "erreur": "version compilée à la main : pas de mise à jour automatique"}); }
@@ -389,7 +578,7 @@ impl Appli {
 
     fn etat(&self) -> Value {
         let c = self.reseau.contacts.lock().unwrap();
-        let mut contacts: Vec<Value> = c.values().map(|c| json!({"id": c.id, "nom": c.nom, "host": c.host, "port": c.port, "en_ligne": c.en_ligne(), "look": c.look})).collect();
+        let mut contacts: Vec<Value> = c.values().map(|c| json!({"id": c.id, "nom": c.nom, "chemin": c.chemin, "en_ligne": c.en_ligne(), "look": c.look})).collect();
         contacts.sort_by(|a, b| a["nom"].as_str().cmp(&b["nom"].as_str()));
         let e = &self.monde.ecrans;
         json!({
@@ -397,7 +586,12 @@ impl Appli {
             "profil_arg": self.profil,
             "version": maj::VERSION,
             "maj": *self.etat_maj.lock().unwrap(),
-            "code": format!("{}:{}", reseau::ip_locale(), self.reseau.port),
+            "soins": self.monde.soins,
+            "humeur": self.monde.soins.humeur(),
+            "age": soins::duree(self.monde.soins.age),
+            "record": soins::duree(self.monde.soins.record),
+            "options": {"devant": self.cfg.devant, "fenetres": self.cfg.fenetres},
+            "code": self.reseau.code(),
             "contacts": contacts,
             "groupes": self.cfg.groupes,
             "ecrans": e.iter().enumerate().map(|(i, e)| json!({"num": i + 1, "nom": e.nom, "x": e.x, "y": e.y, "r": e.r, "b": e.b, "sol": e.sol, "principal": e.principal})).collect::<Vec<_>>(),
@@ -412,7 +606,7 @@ impl Appli {
         std::thread::spawn(move || {
             let fils: Vec<_> = e.dest.iter().cloned().map(|m| {
                 let (r, msg) = (r.clone(), e.msg.clone());
-                std::thread::spawn(move || { let (h, p) = r.adresse(&m); (m.nom.clone(), r.envoyer_a(&h, p, msg, Duration::from_secs(3))) })
+                std::thread::spawn(move || (m.nom.clone(), r.envoyer_a(&m.id, msg)))
             }).collect();
             let res: Vec<(String, Result<Value, String>)> = fils.into_iter().filter_map(|f| f.join().ok()).collect();
             let ok: Vec<&str> = res.iter().filter(|(_, r)| matches!(r, Ok(v) if v["ok"] == true)).map(|(n, _)| n.as_str()).collect();
@@ -429,8 +623,7 @@ impl Appli {
         let membre = Membre { id, nom: String::new(), host: String::new(), port: m["from"]["port"].as_u64().unwrap_or(0) as u16 };
         let r = self.reseau.clone();
         std::thread::spawn(move || {
-            let (h, p) = r.adresse(&membre);
-            if !h.is_empty() { let _ = r.envoyer_a(&h, p, json!({"type": "lu", "msg": m["id"]}), Duration::from_secs(3)); }
+            let _ = r.envoyer_a(&membre.id, json!({"type": "lu", "msg": m["id"]}));
         });
     }
 }

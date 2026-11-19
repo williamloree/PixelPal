@@ -51,6 +51,32 @@ impl Toile {
         }
     }
 
+    /// Rotation d'un quart de tour vers la gauche (le personnage se retrouve couché sur le dos).
+    pub fn pivoter_gauche(&self) -> Toile {
+        let mut t = Toile::new(self.h, self.w);
+        for y in 0..self.h { for x in 0..self.w { t.px[((self.w - 1 - x) * t.w + y) as usize] = self.px[(y * self.w + x) as usize]; } }
+        t
+    }
+
+    /// Retournement haut-bas (marche au plafond).
+    pub fn retourner_v(&self) -> Toile {
+        let mut t = Toile::new(self.w, self.h);
+        for y in 0..self.h { t.px[(y * self.w) as usize..((y + 1) * self.w) as usize].copy_from_slice(&self.px[((self.h - 1 - y) * self.w) as usize..((self.h - y) * self.w) as usize]); }
+        t
+    }
+
+    /// Version fantôme : pâle, bleutée, translucide.
+    pub fn fantome(&self, alpha: f32) -> Toile {
+        let mut t = self.clone();
+        for c in &mut t.px {
+            if *c >> 24 == 0 { continue; }
+            let l = (((*c >> 16) & 255) + ((*c >> 8) & 255) + (*c & 255)) / 3;
+            let (r, g, b) = ((l + 400) / 3, (l + 440) / 3, (l * 2 + 255 * 2) / 4);
+            *c = (((alpha * 255.0) as u32) << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255);
+        }
+        t
+    }
+
     /// Ajoute un contour d'un pixel autour de tout ce qui est opaque.
     pub fn contour(&mut self, c: u32) {
         let src = self.px.clone();

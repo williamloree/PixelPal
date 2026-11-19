@@ -13,8 +13,8 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, w};
 
-/// Clics reçus par les fenêtres (handle de fenêtre), lus par la boucle principale.
-pub static CLICS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+/// Clics reçus par les fenêtres (handle de fenêtre, position dans la fenêtre), lus par la boucle principale.
+pub static CLICS: Mutex<Vec<(isize, i32, i32)>> = Mutex::new(Vec::new());
 pub static ECRANS_CHANGES: Mutex<bool> = Mutex::new(false);
 pub static QUITTER: Mutex<bool> = Mutex::new(false);
 const WM_ICONE: u32 = WM_APP + 1;
@@ -32,7 +32,7 @@ unsafe fn menu_icone(h: HWND) {
         let choix = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, p.x, p.y, None, h, None);
         let _ = DestroyMenu(m);
         match choix.0 {
-            1 => CLICS.lock().unwrap().push(h.0 as isize),
+            1 => CLICS.lock().unwrap().push((h.0 as isize, 0, 0)),
             2 => *QUITTER.lock().unwrap() = true,
             _ => {}
         }
@@ -43,7 +43,13 @@ fn wstr(s: &str) -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collec
 
 unsafe extern "system" fn proc_fenetre(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        WM_LBUTTONDOWN => { CLICS.lock().unwrap().push(h.0 as isize); LRESULT(0) }
+        WM_LBUTTONDOWN => {
+            let (x, y) = ((lp.0 & 0xFFFF) as i16 as i32, ((lp.0 >> 16) & 0xFFFF) as i16 as i32);
+            CLICS.lock().unwrap().push((h.0 as isize, x, y));
+            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(h); } // on garde la souris pendant qu'il est tenu
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => { unsafe { let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture(); } LRESULT(0) }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_SETCURSOR => {
             unsafe { SetCursor(LoadCursorW(None, IDC_HAND).ok()); }
@@ -52,7 +58,7 @@ unsafe extern "system" fn proc_fenetre(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_DISPLAYCHANGE => { *ECRANS_CHANGES.lock().unwrap() = true; LRESULT(0) }
         WM_ICONE => {
             let e = (lp.0 & 0xFFFF) as u32;
-            if e == WM_LBUTTONUP { CLICS.lock().unwrap().push(h.0 as isize); }
+            if e == WM_LBUTTONUP { CLICS.lock().unwrap().push((h.0 as isize, 0, 0)); }
             if e == WM_RBUTTONUP { unsafe { menu_icone(h) }; }
             LRESULT(0)
         }
@@ -146,9 +152,83 @@ impl Calque {
                 Some(&POINT { x: 0, y: 0 }), COLORREF(0), Some(&blend), ULW_ALPHA);
             ReleaseDC(None, ecran);
             if !self.visible { let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE); self.visible = true; }
-            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
+}
+
+/// Ordre d'empilement. `devant` : au-dessus de tout (du haut vers le bas) ; `derriere` : au niveau du bureau,
+/// sous toutes les fenêtres des applications (du haut vers le bas).
+pub fn empiler(devant: &[HWND], derriere: &[HWND]) {
+    unsafe {
+        for h in devant.iter().rev() { let _ = SetWindowPos(*h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+        // HWND_BOTTOM retire l'état « toujours visible » ; le dernier placé finit tout en bas
+        for h in derriere { let _ = SetWindowPos(*h, Some(HWND_BOTTOM), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+    }
+}
+
+/// Bouton gauche de la souris enfoncé (même hors de nos fenêtres).
+pub fn bouton_gauche() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 }
+}
+
+/// Dessus visibles des fenêtres ouvertes, où le personnage peut marcher. La fenêtre active
+/// (au premier plan) est exclue : il ne vient pas déranger l'appli qu'on utilise.
+pub fn plateformes() -> Vec<crate::monde::Plateforme> {
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    unsafe extern "system" fn cb(h: HWND, lp: LPARAM) -> BOOL {
+        unsafe { (*(lp.0 as *mut Vec<HWND>)).push(h); }
+        BOOL(1)
+    }
+    let mut toutes: Vec<HWND> = vec![];
+    unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut toutes as *mut _ as isize)); }
+    let active = unsafe { GetForegroundWindow() };
+    // fenêtres « pleines », de la plus haute à la plus basse
+    let mut pleines: Vec<(HWND, RECT, bool)> = vec![];
+    for h in toutes {
+        unsafe {
+            if !IsWindowVisible(h).as_bool() || IsIconic(h).as_bool() { continue; }
+            let mut masque: u32 = 0;
+            let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut masque as *mut _ as *mut c_void, 4);
+            if masque != 0 { continue; }
+            let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+            if ex & WS_EX_TOOLWINDOW.0 != 0 || ex & WS_EX_TRANSPARENT.0 != 0 { continue; }
+            if GetWindowTextLengthW(h) == 0 { continue; }
+            let mut classe = [0u16; 64];
+            let n = GetClassNameW(h, &mut classe) as usize;
+            let classe = String::from_utf16_lossy(&classe[..n]);
+            if ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow"].contains(&classe.as_str()) { continue; }
+            let mut r = RECT::default();
+            if DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut _ as *mut c_void, size_of::<RECT>() as u32).is_err() {
+                let _ = GetWindowRect(h, &mut r);
+            }
+            if r.right - r.left < 150 || r.bottom - r.top < 80 { continue; }
+            let praticable = h != active && !IsZoomed(h).as_bool();
+            pleines.push((h, r, praticable));
+        }
+    }
+    let mut p = vec![];
+    for (i, (h, r, praticable)) in pleines.iter().enumerate() {
+        if !praticable { continue; }
+        // on retire les morceaux du bord cachés par une fenêtre plus haute (ou sans place au-dessus)
+        let mut morceaux = vec![(r.left, r.right)];
+        for (_, o, _) in &pleines[..i] {
+            if !(o.top < r.top + 2 && o.bottom > r.top - 12) { continue; }
+            morceaux = morceaux.into_iter().flat_map(|(a, b)| {
+                let mut v = vec![];
+                if o.left > a { v.push((a, o.left.min(b))); }
+                if o.right < b { v.push((o.right.max(a), b)); }
+                v
+            }).filter(|(a, b)| b - a > 0).collect();
+        }
+        for (a, b) in morceaux {
+            if b - a >= 100 { p.push(crate::monde::Plateforme { hwnd: h.0 as isize, x0: a as f32, x1: b as f32, y: r.top as f32, gauche: r.left as f32 }); }
+        }
+    }
+    p
+}
+
+impl Calque {
 
     /// Affiche la toile, coin haut-gauche en (x, y) dans l'écran virtuel.
     pub fn afficher(&mut self, t: &Toile, x: i32, y: i32) {
@@ -269,6 +349,12 @@ pub fn ecrans() -> (Vec<Ecran>, f32) {
         }
     }).collect();
     (e, k)
+}
+
+/// Boîte de message d'erreur (avant que les fenêtres ne soient prêtes).
+pub fn alerte(texte: &str) {
+    let t = wstr(texte);
+    unsafe { MessageBoxW(None, windows::core::PCWSTR(t.as_ptr()), w!("PixelPal"), MB_ICONWARNING | MB_OK); }
 }
 
 pub fn curseur() -> (f32, f32) {
