@@ -565,6 +565,11 @@ impl Panneau {
                 if ui.button("Aller sur l'écran suivant").clicked() { self.action("demo", json!({"quoi": "ecran"}), "C'est parti !"); }
                 if ui.button("Voyage par portail").clicked() { self.action("demo", json!({"quoi": "portail"}), "Abracadabra !"); }
                 if ui.button("Recevoir un message test").clicked() { self.action("demo", json!({"quoi": "visiteur"}), "Un visiteur arrive (près de ta souris)."); }
+                if ui.button("Nettoyer l'écran").clicked() { self.action("demo", json!({"quoi": "nettoyer"}), "Un coup de mouchoir…"); }
+                if ui.button("Espionner").clicked() { self.action("demo", json!({"quoi": "espionner"}), "Jumelles ou loupe ? (il commente la fenêtre active)"); }
+                if ui.button("Trébucher").clicked() { self.action("demo", json!({"quoi": "trebucher"}), "Attention au caillou !"); }
+                if ui.button("Escalade au piolet").clicked() { self.action("demo", json!({"quoi": "piolet"}), "En cordée !"); }
+                if ui.button("Chercher un artefact").clicked() { self.action("demo", json!({"quoi": "artefact"}), "Il creuse… et disparaît !"); }
             });
         });
         self.ornements(ui.painter(), rep.response.rect);

@@ -23,7 +23,7 @@ pub enum TypeLien { Cote { sens: i32, x: f32 }, Bas { x0: f32, x1: f32 }, Haut {
 pub struct Lien { pub de: usize, pub vers: usize, pub t: TypeLien }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum TypeObjet { Echelle, Trou, Portail, Tombe }
+pub enum TypeObjet { Echelle, Trou, Portail, Tombe, Buee, Caillou, Eclat }
 
 /// Ce sur quoi le personnage se tient.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -51,6 +51,9 @@ impl Objet {
 #[derive(Clone, Debug)]
 pub struct Bulle { pub titre: String, pub texte: String, pub duree: Option<f32>, pub cliquable: bool }
 
+/// Petite bulle de texte qui disparaît toute seule.
+fn bulle(texte: &str, duree: f32) -> Bulle { Bulle { titre: String::new(), texte: texte.into(), duree: Some(duree), cliquable: false } }
+
 /// Ce que la simulation demande au reste du programme.
 pub enum Sortie {
     Menu(u64),                  // clic sur le personnage : menu de soins
@@ -66,6 +69,7 @@ enum Action {
     Attendre(f32, &'static str),
     AttendreQue(Cond, &'static str),
     Grimper(f32, f32),
+    Piolet(f32, f32),   // comme Grimper, mais en escaladant le bord de l'écran au piolet
     Tomber(f32),
     Sauter { x: f32, y: f32, t: f32, x0: f32, y0: f32 },
     Chute { vx: f32, vy: f32, y0: f32, para: bool },
@@ -77,7 +81,14 @@ enum Action {
     Caresse,
     Mourir,
     Echelle { x: f32, y_haut: f32, y_bas: f32, vers_bas: bool, id: u64 },
-    Creuser { x: f32, y: f32, id: u64 },
+    Creuser { x: f32, y: f32, id: u64, dedans: bool }, // dedans : il finit au-dessus du trou (pour tomber)
+    Poser { t: TypeObjet, x: f32, y: f32 },
+    Essuyer { reste: f32, duree: f32 },
+    Eclat,
+    Taille(f32),
+    TeleportHasard,
+    Espionner,
+    Etoiles(f32),
     OuvrirPortail(f32),
     RouvrirPortail,
     EntrerPortail { t: f32, x0: f32 },
@@ -159,6 +170,8 @@ pub struct Monde {
     pub vitesse_soins: f32, // 1 = temps réel d'utilisation
     pub k: f32, // facteur d'échelle (DPI de l'écran principal)
     pub temps: f32,
+    pub titre_actif: Option<String>, // titre de la fenêtre au premier plan (espionnage)
+    pub proba_piolet: f32,           // chance de passer d'un écran à l'autre au piolet plutôt qu'à l'échelle
     rappel_faim: f32,
     seq: u64,
     alea: u64,
@@ -170,7 +183,7 @@ impl Monde {
     pub fn new(nom: &str, look: &str) -> Self {
         let graine = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
         let mut m = Monde { ecrans: vec![], liens: vec![], acteurs: vec![], objets: vec![], sorties: vec![], plateformes: vec![],
-            soins: Soins::default(), vitesse_soins: 1.0, k: 1.0, temps: 0.0, rappel_faim: 0.0, seq: 10, alea: graine | 1 };
+            soins: Soins::default(), vitesse_soins: 1.0, k: 1.0, temps: 0.0, titre_actif: None, proba_piolet: 0.5, rappel_faim: 0.0, seq: 10, alea: graine | 1 };
         m.acteurs.push(Acteur::new(MOI, nom, look, 0.0, 0.0, 0));
         m
     }
@@ -277,6 +290,11 @@ impl Monde {
                     let diff = fb - fa;
                     if diff.abs() <= p(self, 8.0) {
                         l_actions.extend([Action::Marcher(bord + sf * p(self, 70.0)), Action::PoserY(fb), Action::Ecran(eb.id)]);
+                    } else if diff < 0.0 && self.hasard() < self.proba_piolet {
+                        // l'écran d'arrivée est plus haut : il escalade le bord au piolet, puis passe de l'autre côté
+                        let wx = bord - sf * p(self, 16.0);
+                        l_actions.extend([Action::Marcher(wx), Action::Sens(s), Action::Piolet(fb, wx), Action::Ecran(eb.id),
+                            Action::Marcher(bord + sf * p(self, 70.0))]);
                     } else if diff < 0.0 {
                         // l'écran d'arrivée est plus haut : échelle contre le bord, côté départ
                         let lx = bord - sf * p(self, 30.0);
@@ -287,6 +305,11 @@ impl Monde {
                         l_actions.extend([Action::Marcher(bord - sf * p(self, 15.0)),
                             Action::Sauter { x: bord + sf * p(self, 80.0), y: fb, t: -1.0, x0: 0.0, y0: 0.0 },
                             Action::Ecran(eb.id), Action::Attendre(0.3, "land")]);
+                    } else if self.hasard() < self.proba_piolet {
+                        // grande descente : il passe le bord et descend en rappel au piolet, face à la paroi
+                        let wx = bord + sf * p(self, 16.0);
+                        l_actions.extend([Action::Marcher(wx), Action::Sens(-s), Action::Piolet(fb, wx), Action::Ecran(eb.id),
+                            Action::Marcher(wx + sf * p(self, 50.0))]);
                     } else {
                         // grande descente : il pose une échelle depuis le haut, de l'autre côté du bord
                         let lx = bord + sf * p(self, 30.0);
@@ -298,7 +321,7 @@ impl Monde {
                 TypeLien::Bas { x0, x1 } => {
                     // écran du dessous : il creuse, tombe, et le trou se referme derrière lui
                     let hx = clamp(x, x0 + p(self, 70.0), x1 - p(self, 70.0));
-                    l_actions.extend([Action::Marcher(hx), Action::Creuser { x: hx, y: ea.sol, id: 0 },
+                    l_actions.extend([Action::Marcher(hx), Action::Creuser { x: hx, y: ea.sol, id: 0, dedans: true },
                         Action::Tomber(eb.sol), Action::Ecran(eb.id), Action::Ranger, Action::Attendre(0.35, "land")]);
                     x = hx;
                 }
@@ -431,6 +454,7 @@ impl Monde {
         a.action = None;
         a.transit = false;
         a.au_repos();
+        a.echelle = 1.0;
         a.porte = true;
         a.appui = Appui::Air;
         a.etoiles = 0.0;
@@ -518,6 +542,8 @@ impl Monde {
         a.lettre = false;
         a.porte = false;
         a.renverse = false;
+        a.couche = false;
+        a.echelle = 1.0;
         if a.appui != Appui::Sol { a.file.push_back(Action::Chute { vx: 0.0, vy: 0.0, y0: a.y, para: false }); }
         a.file.extend([Action::Bulle(Some(Bulle { titre: String::new(), texte: "Je… n'en peux plus…".into(), duree: Some(2.5), cliquable: false })),
             Action::Attendre(1.5, "faible"), Action::Couche(true), Action::Attendre(2.5, "ko"), Action::Mourir]);
@@ -623,7 +649,7 @@ impl Monde {
         f.push_back(Action::Transit(false));
     }
 
-    /// Escalade un bord d'écran (là où il n'y a pas d'écran voisin), puis marche au plafond ou redescend.
+    /// Escalade un bord d'écran au piolet (là où il n'y a pas d'écran voisin), puis marche au plafond ou redescend.
     fn escalader(&mut self, ai: usize) -> bool {
         let e = self.ecran(self.acteurs[ai].ecran).clone();
         let libres: Vec<i32> = [-1, 1].into_iter()
@@ -638,20 +664,104 @@ impl Monde {
         let pause = self.entre(1.0, 3.0);
         let lacher = self.soins.parachutes >= 2 && self.hasard() < 0.35;
         let f = &mut self.acteurs[ai].file;
-        f.extend([Action::Transit(true), Action::Marcher(wx), Action::Sens(s), Action::Grimper(haut, wx)]);
+        f.extend([Action::Transit(true), Action::Marcher(wx), Action::Sens(s), Action::Piolet(haut, wx)]);
         if plafond {
             f.extend([Action::Renverser(true), Action::Marcher(x2), Action::Attendre(pause, "idle")]);
             if lacher {
                 // il se laisse tomber… et ouvre son parachute
                 f.extend([Action::Renverser(false), Action::Chute { vx: 0.0, vy: 0.0, y0: 0.0, para: false }]);
             } else {
-                f.extend([Action::Marcher(wx), Action::Renverser(false), Action::Sens(s), Action::Grimper(e.sol, wx), Action::Appui(Appui::Sol)]);
+                f.extend([Action::Marcher(wx), Action::Renverser(false), Action::Sens(s), Action::Piolet(e.sol, wx), Action::Appui(Appui::Sol)]);
             }
         } else {
-            f.extend([Action::Attendre(0.8, "climb"), Action::Grimper(e.sol, wx), Action::Appui(Appui::Sol)]);
+            f.extend([Action::Attendre(0.8, "piolet"), Action::Piolet(e.sol, wx), Action::Appui(Appui::Sol)]);
         }
         f.push_back(Action::Transit(false));
         true
+    }
+
+    // ---------- petites scènes ----------
+    /// Il voit des traces sur l'écran, souffle dessus et les essuie au mouchoir.
+    fn nettoyer(&mut self, ai: usize) {
+        let s = if self.hasard() < 0.5 { 1 } else { -1 };
+        let a = &self.acteurs[ai];
+        let (x, y) = (a.x + s as f32 * self.px(30.0), a.y - self.px(70.0));
+        self.acteurs[ai].file.extend([Action::Transit(true), Action::Sens(s),
+            Action::Bulle(Some(bulle("Hmm, des traces de doigts sur l'écran…", 2.5))), Action::Attendre(1.2, "idle"),
+            Action::Poser { t: TypeObjet::Buee, x, y }, Action::Attendre(1.4, "huff"),
+            Action::Essuyer { reste: 3.0, duree: 3.0 }, Action::Eclat, Action::Ranger,
+            Action::Bulle(Some(bulle("Voilà, tout propre !", 2.5))), Action::Attendre(1.2, "happy"), Action::Transit(false)]);
+    }
+
+    /// Il sort ses jumelles ou sa loupe et commente la fenêtre au premier plan.
+    fn espionner(&mut self, ai: usize) {
+        let anim = if self.hasard() < 0.5 { "jumelles" } else { "loupe" };
+        let s = if self.hasard() < 0.5 { 1 } else { -1 };
+        let d = self.entre(2.0, 3.0);
+        self.acteurs[ai].file.extend([Action::Sens(s), Action::Attendre(d, anim), Action::Espionner,
+            Action::Attendre(2.5, anim), Action::Attendre(0.6, "idle")]);
+    }
+
+    /// Il trébuche sur un caillou, s'étale, puis se relève (au sol seulement).
+    fn trebucher(&mut self, ai: usize) -> bool {
+        let a = &self.acteurs[ai];
+        if a.appui != Appui::Sol { return false; }
+        let e = self.ecran(a.ecran).clone();
+        let (ax, ay) = (a.x, a.y);
+        let d = self.px(90.0);
+        let mut s = if self.hasard() < 0.5 { 1.0 } else { -1.0 };
+        if ax + s * d > e.dx || ax + s * d < e.gx { s = -s; }
+        let arret = clamp(ax + s * d, e.gx, e.dx);
+        let caillou = arret + s * self.px(12.0);
+        self.acteurs[ai].file.extend([Action::Transit(true), Action::Poser { t: TypeObjet::Caillou, x: caillou, y: ay },
+            Action::Marcher(arret), Action::Sens(s as i32), Action::Attendre(0.45, "trip"),
+            Action::Couche(true), Action::Etoiles(2.0), Action::Attendre(1.8, "ko"), Action::Couche(false), Action::Attendre(0.4, "land"),
+            Action::Bulle(Some(bulle("Oups ! Qui a laissé traîner ce caillou ?", 3.0))), Action::Attendre(1.0, "idle"),
+            Action::Ranger, Action::Transit(false)]);
+        true
+    }
+
+    /// Il creuse, déterre un artefact ancien… qui le téléporte au hasard sur un écran (au sol seulement).
+    fn chercher_artefact(&mut self, ai: usize) -> bool {
+        let a = &self.acteurs[ai];
+        if a.appui != Appui::Sol { return false; }
+        let e = self.ecran(a.ecran).clone();
+        let (ax, ay, sens) = (a.x, a.y, a.sens as f32);
+        let hx = clamp(ax + sens * self.px(30.0), e.gx, e.dx);
+        self.acteurs[ai].file.extend([Action::Transit(true), Action::Bulle(Some(bulle("Ça sonne creux par ici…", 2.0))),
+            Action::Attendre(1.2, "idle"), Action::Creuser { x: hx, y: ay, id: 0, dedans: false }, Action::Ranger,
+            Action::Bulle(Some(bulle("Un artefact ancien !", 2.5))), Action::Attendre(2.0, "artefact"),
+            Action::Eclat, Action::Taille(0.0), Action::TeleportHasard, Action::Eclat, Action::Taille(1.0),
+            Action::Bulle(Some(bulle("Woah… où suis-je ?", 3.0))), Action::Attendre(1.5, "idle"), Action::Transit(false)]);
+        true
+    }
+
+    /// Une scène au hasard (renvoie faux si aucune n'est possible ici).
+    fn fantaisie(&mut self, ai: usize) -> bool {
+        let r = self.hasard();
+        if r < 0.3 { self.espionner(ai); true }
+        else if r < 0.55 { self.nettoyer(ai); true }
+        else if r < 0.8 { self.trebucher(ai) }
+        else { self.chercher_artefact(ai) }
+    }
+
+    /// Bouton « Démo » du panneau : lance une scène tout de suite.
+    pub fn demo(&mut self, quoi: &str) -> Result<(), String> {
+        let ai = self.disponible()?;
+        let au_sol = self.acteurs[ai].appui == Appui::Sol;
+        let ok = match quoi {
+            "nettoyer" => { self.nettoyer(ai); true }
+            "espionner" => { self.espionner(ai); true }
+            "trebucher" => self.trebucher(ai),
+            "artefact" => self.chercher_artefact(ai),
+            "piolet" => {
+                if !au_sol { false }
+                else if self.escalader(ai) { true }
+                else { return Err("Pas de bord libre ici : un autre écran touche chaque côté.".into()); }
+            }
+            _ => return Err(format!("action inconnue : {quoi}")),
+        };
+        if ok { Ok(()) } else { Err("Il doit être au sol pour ça.".into()) }
     }
 
     // ---------- promenade ----------
@@ -678,6 +788,9 @@ impl Monde {
             } else if r < 0.82 {
                 let d = self.entre(4.0, 9.0);
                 self.acteurs[ai].file.push_back(Action::Attendre(d, "sit"));
+            } else if r < 0.9 {
+                // du haut de sa fenêtre, il espionne ou nettoie l'écran
+                if self.hasard() < 0.6 { self.espionner(ai) } else { self.nettoyer(ai) }
             } else {
                 let d = self.entre(1.5, 4.0);
                 self.acteurs[ai].file.push_back(Action::Attendre(d, "idle"));
@@ -713,6 +826,8 @@ impl Monde {
             self.acteurs[ai].file.push_back(Action::Attendre(d, "sit"));
         } else if r < 0.79 {
             self.acteurs[ai].file.push_back(Action::Attendre(1.5, "wave"));
+        } else if r < 0.91 && !affame && self.fantaisie(ai) {
+            // espionnage, nettoyage, chute sur un caillou ou fouille d'un artefact
         } else {
             let d = self.entre(1.5, 4.0);
             let s = if self.hasard() < 0.5 { 1 } else { -1 };
@@ -729,6 +844,8 @@ impl Monde {
                 o.p = if o.cible > o.p { (o.p + v).min(o.cible) } else { (o.p - v).max(o.cible) };
             } else if o.t != TypeObjet::Tombe {
                 o.vie -= dt;
+                if o.t == TypeObjet::Eclat { o.p += dt; }
+                if o.t == TypeObjet::Buee && o.cible > o.p { o.p = (o.p + dt * 1.5).min(o.cible); } // la buée apparaît
             }
         }
         self.objets.retain(|o| if o.t == TypeObjet::Portail { !(o.cible == 0.0 && o.p <= 0.0) } else { o.vie > -2.0 });
@@ -765,7 +882,7 @@ impl Monde {
             }
             // la fenêtre sous ses pieds a disparu, bougé ou été recouverte : il tombe
             let a = &self.acteurs[ai];
-            let en_mouvement = matches!(a.action, Some(Action::Grimper(..) | Action::Chute { .. } | Action::Sauter { .. }));
+            let en_mouvement = matches!(a.action, Some(Action::Grimper(..) | Action::Piolet(..) | Action::Chute { .. } | Action::Sauter { .. }));
             if !en_mouvement && !self.soutenu(a) {
                 let a = &mut self.acteurs[ai];
                 a.action = None;
@@ -940,6 +1057,16 @@ impl Monde {
                 a.y += d.signum() * d.abs().min(grimpe * dt);
                 false
             }
+            Action::Piolet(y, x) => {
+                // un peu plus lent qu'à l'échelle : il plante ses piolets un à un
+                let a = &mut self.acteurs[ai];
+                a.anim("piolet");
+                a.x = *x;
+                let d = *y - a.y;
+                if d.abs() < 1.5 { a.y = *y; return true; }
+                a.y += d.signum() * d.abs().min(grimpe * 0.75 * dt);
+                false
+            }
             Action::Tomber(y) => {
                 let a = &mut self.acteurs[ai];
                 if neuf { a.vy = 0.0; }
@@ -970,7 +1097,7 @@ impl Monde {
                 o.p += dt / duree;
                 o.p >= 1.0
             }
-            Action::Creuser { x, y, id } => {
+            Action::Creuser { x, y, id, dedans } => {
                 if neuf {
                     *id = self.nid();
                     self.objets.push(Objet { id: *id, t: TypeObjet::Trou, x: *x, y: *y, y_haut: 0.0, y_bas: 0.0, vers_bas: false, p: 0.0, cible: 1.0, vie: 90.0 });
@@ -979,9 +1106,69 @@ impl Monde {
                 }
                 let Some(o) = self.objets.iter_mut().find(|o| o.id == *id) else { return true; };
                 o.p += dt / 2.8;
-                if o.p >= 1.0 { self.acteurs[ai].x = *x; return true; }
+                if o.p >= 1.0 { if *dedans { self.acteurs[ai].x = *x; } return true; }
                 false
             }
+            Action::Poser { t, x, y } => {
+                if let Some(o) = self.acteurs[ai].dernier_objet.take() { self.ranger(o); }
+                let id = self.nid();
+                let (p, cible) = if *t == TypeObjet::Buee { (0.0, 1.0) } else { (1.0, 1.0) };
+                self.objets.push(Objet { id, t: *t, x: *x, y: *y, y_haut: 0.0, y_bas: 0.0, vers_bas: false, p, cible, vie: 40.0 });
+                self.acteurs[ai].dernier_objet = Some(id);
+                true
+            }
+            Action::Essuyer { reste, duree } => {
+                self.acteurs[ai].anim("wipe");
+                *reste -= dt;
+                let k = (*reste / *duree).clamp(0.0, 1.0);
+                if let Some(id) = self.acteurs[ai].dernier_objet {
+                    if let Some(o) = self.objets.iter_mut().find(|o| o.id == id) { o.cible = 0.0; o.p = o.p.min(k); }
+                }
+                *reste <= 0.0
+            }
+            Action::Eclat => {
+                // sur l'objet en cours (la buée essuyée), sinon autour du personnage
+                let dernier = self.acteurs[ai].dernier_objet.and_then(|id| self.objets.iter().find(|o| o.id == id)).map(|o| (o.x, o.y));
+                let a = &self.acteurs[ai];
+                let (x, y) = dernier.unwrap_or((a.x, a.y - self.px(55.0)));
+                let id = self.nid();
+                self.objets.push(Objet { id, t: TypeObjet::Eclat, x, y, y_haut: 0.0, y_bas: 0.0, vers_bas: false, p: 0.0, cible: 1.0, vie: 0.4 });
+                true
+            }
+            Action::Taille(cible) => {
+                let a = &mut self.acteurs[ai];
+                let v = dt * 2.5;
+                a.echelle = if *cible > a.echelle { (a.echelle + v).min(*cible) } else { (a.echelle - v).max(*cible) };
+                (a.echelle - *cible).abs() < 0.001
+            }
+            Action::TeleportHasard => {
+                let n = self.ecrans.len();
+                let i = (self.hasard() * n as f32) as usize % n.max(1);
+                let e = self.ecrans[i].clone();
+                let x = self.entre(e.gx, e.dx);
+                let s = if self.hasard() < 0.5 { 1 } else { -1 };
+                let a = &mut self.acteurs[ai];
+                a.ecran = e.id; a.x = x; a.y = e.sol; a.sens = s;
+                a.appui = Appui::Sol; a.renverse = false;
+                true
+            }
+            Action::Espionner => {
+                let texte = match self.titre_actif.clone() {
+                    Some(t) => {
+                        let court = if t.chars().count() > 38 { t.chars().take(36).collect::<String>() + "…" } else { t };
+                        match (self.hasard() * 4.0) as usize {
+                            0 => format!("Tiens, « {court} »… intéressant !"),
+                            1 => format!("Hmm… « {court} ». Je ne dirai rien."),
+                            2 => format!("J'ai vu « {court} » ! Tu bosses dur."),
+                            _ => format!("Psst… c'est quoi, « {court} » ?"),
+                        }
+                    }
+                    None => "Rien à espionner… tout est bien rangé.".to_string(),
+                };
+                self.acteurs[ai].bulle = Some(bulle(&texte, 4.5));
+                true
+            }
+            Action::Etoiles(d) => { self.acteurs[ai].etoiles = *d; true }
             Action::OuvrirPortail(dx) => {
                 if neuf {
                     let id = self.nid();
@@ -1119,6 +1306,7 @@ mod tests {
         let mut m = Monde::new("Test", "aventurier");
         m.definir_ecrans(ecrans, 1.0);
         m.objets.clear();
+        m.proba_piolet = 0.0; // trajets à l'échelle, sauf dans les tests du piolet
         let e = m.ecran(0).clone();
         let a = m.moi();
         a.file.clear();
@@ -1307,9 +1495,89 @@ mod tests {
             plafond |= a.renverse;
             if !a.transit { break; }
         }
-        assert!(vu.contains(&"climb"), "{vu:?}");
+        assert!(vu.contains(&"piolet"), "{vu:?}");
         let a = &m.acteurs[0];
         assert!(!a.renverse && a.appui == Appui::Sol && (a.y - m.ecran(0).sol).abs() < 1.0, "plafond vu : {plafond}, {vu:?}");
+    }
+
+    /// Joue la file d'actions jusqu'au bout et renvoie les animations vues.
+    fn jouer(m: &mut Monde) -> Vec<&'static str> {
+        let mut vu = vec![];
+        for _ in 0..2000 {
+            m.maj(0.05);
+            let a = &m.acteurs[0];
+            if vu.last() != Some(&a.anim) { vu.push(a.anim); }
+            if a.file.is_empty() && !a.transit { break; }
+        }
+        vu
+    }
+
+    #[test]
+    fn piolet_vers_un_ecran_plus_haut_puis_plus_bas() {
+        for y in [-400.0, 500.0] {
+            let mut m = pret(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0), ecran(1, 1920.0, y, 1920.0, 1080.0)]);
+            m.proba_piolet = 1.0;
+            m.aller_a(0, 1);
+            let vu = jouer(&mut m);
+            assert!(vu.contains(&"piolet") && !vu.contains(&"build"), "{vu:?}");
+            arrive(&m, 1);
+        }
+    }
+
+    #[test]
+    fn nettoie_la_buee_au_mouchoir() {
+        let mut m = pret(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0)]);
+        m.nettoyer(0);
+        let (mut vu, mut buee) = (vec![], false);
+        for _ in 0..400 {
+            m.maj(0.05);
+            let a = &m.acteurs[0];
+            if vu.last() != Some(&a.anim) { vu.push(a.anim); }
+            buee |= m.objets.iter().any(|o| o.t == TypeObjet::Buee && o.p > 0.5);
+            if a.file.is_empty() && !a.transit { break; }
+        }
+        assert!(buee && vu.contains(&"huff") && vu.contains(&"wipe"), "{vu:?}");
+        assert!(m.objets.iter().all(|o| o.t != TypeObjet::Buee || o.p <= 0.0), "la buée doit être essuyée");
+        assert!(m.objets.iter().any(|o| o.t == TypeObjet::Eclat));
+    }
+
+    #[test]
+    fn espionne_la_fenetre_active() {
+        let mut m = pret(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0)]);
+        m.titre_actif = Some("rapport.xlsx - Excel".into());
+        m.espionner(0);
+        let (mut vu, mut texte) = (vec![], String::new());
+        for _ in 0..300 {
+            m.maj(0.05);
+            let a = &m.acteurs[0];
+            if vu.last() != Some(&a.anim) { vu.push(a.anim); }
+            if let Some(b) = &a.bulle { texte = b.texte.clone(); }
+            if a.file.is_empty() { break; }
+        }
+        assert!(vu.contains(&"jumelles") || vu.contains(&"loupe"), "{vu:?}");
+        assert!(texte.contains("rapport.xlsx"), "{texte}");
+    }
+
+    #[test]
+    fn trebuche_tombe_et_se_releve() {
+        let mut m = pret(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0)]);
+        assert!(m.trebucher(0));
+        let vu = jouer(&mut m);
+        assert!(vu.contains(&"trip") && vu.contains(&"ko"), "{vu:?}");
+        let a = &m.acteurs[0];
+        assert!(!a.couche && a.appui == Appui::Sol && (a.y - m.ecran(0).sol).abs() < 1.0);
+    }
+
+    #[test]
+    fn artefact_le_teleporte_sur_un_ecran() {
+        let mut m = pret(vec![ecran(0, 0.0, 0.0, 1920.0, 1080.0), ecran(1, 3000.0, 200.0, 1920.0, 1080.0)]);
+        assert!(m.chercher_artefact(0));
+        let vu = jouer(&mut m);
+        assert!(vu.contains(&"dig") && vu.contains(&"artefact"), "{vu:?}");
+        let a = &m.acteurs[0];
+        let e = m.ecran(a.ecran);
+        assert!((a.echelle - 1.0).abs() < 1e-3, "il doit réapparaître en entier");
+        assert!((a.y - e.sol).abs() < 1.0 && a.x >= e.gx && a.x <= e.dx && a.appui == Appui::Sol);
     }
 
     #[test]

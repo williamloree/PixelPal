@@ -39,9 +39,14 @@ Au premier lancement, Windows demande l'accès au réseau : **Autoriser** (il en
 | **L'aventurier** qui se promène, s'assoit, salue | Il va bien. Clic : menu de soins (jauges, nourriture, caresse, panneau). |
 | **Une échelle** qu'il cloue puis range une fois monté | Il change d'écran (écran plus haut, ou plus bas). |
 | **Un trou** creusé à la pelle | L'écran du dessous ; le trou se rebouche après sa chute. |
-| **Lui, tête en bas**, en haut de l'écran | Il a escaladé le bord et se promène au plafond. |
+| **Lui, tête en bas**, en haut de l'écran | Il a escaladé le bord au piolet et se promène au plafond. |
+| **Lui, accroché au bord** avec deux piolets | Il escalade le côté de l'écran, ou passe ainsi sur un écran voisin plus haut ou plus bas. |
 | **Lui, sur le dessus d'une fenêtre** | Il y est monté (saut ou échelle). Il suit la fenêtre si elle bouge, tombe si elle se ferme. |
 | **Un parachute** rayé rouge et crème | Lâché de haut, il l'ouvre. Sans parachute : KO, étoiles, −15 santé. |
+| **De la buée et un mouchoir** | Il a vu des traces de doigts : il souffle sur la vitre et l'essuie de l'intérieur. |
+| **Des jumelles ou une loupe** | Il espionne : sa bulle commente le titre de la fenêtre que tu utilises. |
+| **Un caillou**, puis lui étalé par terre | Il a trébuché. Quelques étoiles, et il se relève. |
+| **Un trou, une gemme brillante, un éclat** | Il a déterré un artefact ancien, qui le téléporte au hasard sur un de tes écrans. |
 | **Un portail** violet | Il part livrer une lettre, ou voyage vers un écran qu'aucun chemin ne relie. |
 | **Un visiteur** avec une lettre et une bulle | Un collègue t'a écrit. Clic : lu ; il salue et repart, l'expéditeur est prévenu. |
 | **Une tombe et un fantôme** | Il est mort de faim. Clic sur le fantôme : « Ressusciter ». |
@@ -80,12 +85,12 @@ Chaque PixelPal a un **code d'invitation** fixe (52 caractères, onglet Contacts
 
 ![Les cinq tenues : aventurier kaki, bleu marine, forêt, rouge, mage violet.](assets/images/tenues.png)
 
-Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche) dessinée sur 40 × 40 pixels puis détourée calque par calque. Il y a 21 animations : marche, escalade, creuser, poser une échelle, portail, parachute, repas, joie, KO… Le storyboard animé est dans panneau > Perso.
+Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche) dessinée sur 40 × 40 pixels puis détourée calque par calque. Il y a 28 animations : marche, escalade (échelle ou piolet), nettoyer l'écran, jumelles, loupe, trébucher, artefact, creuser, poser une échelle, portail, parachute, repas, joie, KO… Le storyboard animé est dans panneau > Perso.
 
 <details>
 <summary>Planche de toutes les animations</summary>
 
-![Planche des 21 animations, image par image.](assets/images/planche.png)
+![Planche des 28 animations, image par image.](assets/images/planche.png)
 
 </details>
 

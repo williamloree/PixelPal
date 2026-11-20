@@ -228,6 +228,22 @@ pub fn plateformes() -> Vec<crate::monde::Plateforme> {
     p
 }
 
+/// Titre de la fenêtre au premier plan (ce qu'il espionne aux jumelles), hors bureau, barre des tâches et PixelPal.
+pub fn titre_actif() -> Option<String> {
+    unsafe {
+        let h = GetForegroundWindow();
+        if h.is_invalid() { return None; }
+        let mut classe = [0u16; 64];
+        let n = GetClassNameW(h, &mut classe) as usize;
+        let classe = String::from_utf16_lossy(&classe[..n]);
+        if ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "PixelPalCalque"].contains(&classe.as_str()) { return None; }
+        let mut buf = [0u16; 256];
+        let n = GetWindowTextW(h, &mut buf).max(0) as usize;
+        let t = String::from_utf16_lossy(&buf[..n]).trim().to_string();
+        if t.is_empty() || t.starts_with("PixelPal") { None } else { Some(t) }
+    }
+}
+
 impl Calque {
 
     /// Affiche la toile, coin haut-gauche en (x, y) dans l'écran virtuel.

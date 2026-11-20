@@ -230,6 +230,8 @@ fn lancer(profil: Option<String>) {
             verif_fenetres = Instant::now();
             let p = if app.cfg.fenetres { fenetres::plateformes() } else { vec![] };
             app.monde.definir_plateformes(p);
+            // on garde la dernière appli utilisée (le panneau et le bureau ne comptent pas)
+            if let Some(t) = fenetres::titre_actif() { app.monde.titre_actif = Some(t); }
         }
 
         while let Ok(evt) = rx.try_recv() { app.evenement(evt); }
@@ -348,13 +350,33 @@ fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<Str
                 sprites::tombe(&mut t, u, 8 * u, 17 * u);
                 (g, h, t)
             }
+            TypeObjet::Buee => {
+                let (g, h) = (o.x as i32 - 10 * u, o.y as i32 - 8 * u);
+                let mut t = Toile::new(20 * u, 16 * u);
+                sprites::buee(&mut t, u, o.x as i32 - g, o.y as i32 - h, o.p);
+                (g, h, t)
+            }
+            TypeObjet::Caillou => {
+                let (g, h) = (o.x as i32 - 4 * u, o.y as i32 - 5 * u);
+                let mut t = Toile::new(8 * u, 6 * u);
+                sprites::caillou(&mut t, u, o.x as i32 - g, o.y as i32 - h);
+                (g, h, t)
+            }
+            TypeObjet::Eclat => {
+                let (g, h) = (o.x as i32 - 23 * u, o.y as i32 - 23 * u);
+                let mut t = Toile::new(46 * u, 46 * u);
+                sprites::eclat(&mut t, u, o.x as i32 - g, o.y as i32 - h, o.p);
+                (g, h, t)
+            }
         };
+        // la buée (sur la vitre) et les éclats passent devant le personnage
+        let par_dessus = matches!(o.t, TypeObjet::Buee | TypeObjet::Eclat);
         let mut t = t;
         let a = o.alpha();
         if a < 1.0 { for p in &mut t.px { *p = (*p & 0x00FF_FFFF) | ((((*p >> 24) as f32 * a) as u32) << 24); } }
         let c = calques.entry(cle.clone()).or_insert_with(|| Calque::new(false));
         c.afficher(&t, gauche, haut);
-        if moi_devant { devant.push(c.hwnd) } else { derriere_decor.push(c.hwnd) }
+        if moi_devant { devant.push(c.hwnd) } else if par_dessus { derriere_bulles.push(c.hwnd) } else { derriere_decor.push(c.hwnd) }
         vus.insert(cle);
     }
     for a in &m.acteurs {
@@ -553,6 +575,9 @@ impl Appli {
                         let msg = json!({"from": {"id": "", "name": "Visiteur test"}});
                         self.monde.accueillir("Visiteur test", "violet", "✉ Visiteur test · Démo".into(),
                             "Ceci est un message de démonstration. Clique sur moi ou sur la bulle pour le fermer.".into(), msg, e);
+                    }
+                    q @ ("nettoyer" | "espionner" | "trebucher" | "piolet" | "artefact") => {
+                        if let Err(e) = self.monde.demo(q) { return json!({"ok": false, "erreur": e}); }
                     }
                     _ => {}
                 }

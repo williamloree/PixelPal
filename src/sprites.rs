@@ -66,19 +66,21 @@ pub enum Yeux { Ouverts, Fermes, Haut, Croix, Contents }
 #[derive(Clone, Copy, PartialEq)]
 pub enum Bouche { Neutre, O, Sourire }
 #[derive(Clone, Copy, PartialEq)]
-pub enum Objet { Rien, Lettre, Pelle, Marteau, Pomme, Baie, Champi }
+pub enum Objet { Rien, Lettre, Pelle, Marteau, Pomme, Baie, Champi, Mouchoir, Loupe, Jumelles, Piolet, Artefact }
 
 #[derive(Clone, Copy)]
 pub struct Pose {
     leg_f: (f32, f32), leg_b: (f32, f32), arm_f: (f32, f32), arm_b: (f32, f32),
     ub: i32, by: i32, air: bool, yeux: Yeux, bouche: Bouche, chapeau_y: i32, echarpe: i32,
     objet: Objet, obj_a: f32, terre: bool, etincelle: Option<i32>,
+    objet_b: Objet, obj_b_a: f32, // objet tenu dans la main du fond (second piolet)
 }
 
 impl Default for Pose {
     fn default() -> Self {
         Pose { leg_f: (4.0, 0.0), leg_b: (-4.0, 0.0), arm_f: (-8.0, 14.0), arm_b: (10.0, 10.0), ub: 0, by: 0, air: false,
-            yeux: Yeux::Ouverts, bouche: Bouche::Neutre, chapeau_y: 0, echarpe: 0, objet: Objet::Rien, obj_a: 0.0, terre: false, etincelle: None }
+            yeux: Yeux::Ouverts, bouche: Bouche::Neutre, chapeau_y: 0, echarpe: 0, objet: Objet::Rien, obj_a: 0.0, terre: false, etincelle: None,
+            objet_b: Objet::Rien, obj_b_a: 0.0 }
     }
 }
 
@@ -185,15 +187,15 @@ fn chapeau(t: &mut Toile, p: &Palette, u: f32, pose: &Pose) {
     px(t, p.hat, 14.0, y + 4.0, 12, 1); px(t, p.hat_shade, 14.0, y + 4.0, 2, 1); // bord
 }
 
-fn objet(t: &mut Toile, p: &Palette, m: &Main, pose: &Pose) {
-    match pose.objet {
+fn objet(t: &mut Toile, p: &Palette, m: &Main, o: Objet, angle: f32, pose: &Pose) {
+    match o {
         Objet::Lettre => {
             px(t, p.paper, m.x - 2.0, m.y - 3.0, 6, 4); px(t, p.paper_shade, m.x - 2.0, m.y, 6, 1);
             px(t, p.paper_shade, m.x - 1.0, m.y - 2.0, 1, 1); px(t, p.paper_shade, m.x + 2.0, m.y - 2.0, 1, 1);
             px(t, p.seal, m.x, m.y - 1.0, 2, 1);
         }
         Objet::Pelle => {
-            let (a, b) = dir(pose.obj_a);
+            let (a, b) = dir(angle);
             let (cx, cy) = (m.x + 0.5, m.y + 0.5);
             trait_(t, p.wood, cx - a * 4.0, cy - b * 4.0, cx + a * 7.0, cy + b * 7.0, 1);
             let (bx, by) = (cx + a * 8.0, cy + b * 8.0);
@@ -201,11 +203,47 @@ fn objet(t: &mut Toile, p: &Palette, m: &Main, pose: &Pose) {
             if pose.terre { px(t, p.dirt, bx - 1.0, by - 2.0, 3, 1); }
         }
         Objet::Marteau => {
-            let (a, b) = dir(pose.obj_a);
+            let (a, b) = dir(angle);
             trait_(t, p.wood, m.x + 0.5, m.y + 0.5, m.x + 0.5 + a * 5.0, m.y + 0.5 + b * 5.0, 1);
             px(t, p.metal, m.x + a * 5.0 - 1.0, m.y + b * 5.0 - 1.0, 3, 2);
         }
-        Objet::Pomme | Objet::Baie | Objet::Champi => aliment(t, pose.objet, m.x - 1.0, m.y - 3.0),
+        Objet::Pomme | Objet::Baie | Objet::Champi => aliment(t, o, m.x - 1.0, m.y - 3.0),
+        Objet::Mouchoir => {
+            // mouchoir blanc à liseré bleu, un coin qui pend
+            px(t, 0xFFF4F7FF, m.x - 1.0, m.y - 2.0, 4, 4); px(t, 0xFFD6DEEA, m.x - 1.0, m.y + 1.0, 4, 1);
+            px(t, 0xFF6F9BD8, m.x - 1.0, m.y - 2.0, 4, 1); px(t, 0xFFF4F7FF, m.x, m.y + 2.0, 2, 1);
+        }
+        Objet::Loupe => {
+            // manche, puis lentille cerclée au bout
+            let (a, b) = dir(angle);
+            let (cx, cy) = (m.x + 0.5, m.y + 0.5);
+            trait_(t, p.wood, cx, cy, cx + a * 3.0, cy + b * 3.0, 1);
+            let (lx, ly) = ((cx + a * 6.0).round(), (cy + b * 6.0).round());
+            px(t, p.metal_shade, lx - 2.0, ly - 2.0, 5, 5);
+            px(t, 0xFFBFEFFF, lx - 1.0, ly - 1.0, 3, 3);
+            px(t, 0xFFFFFFFF, lx - 1.0, ly - 1.0, 1, 1);
+        }
+        Objet::Jumelles => {
+            // jumelles portées aux yeux (vues de profil) : corps sombre et objectif bleuté
+            px(t, 0xFF3A3440, m.x - 1.0, m.y - 4.0, 5, 3); px(t, 0xFF55505E, m.x - 1.0, m.y - 4.0, 5, 1);
+            px(t, 0xFF8FD8FF, m.x + 4.0, m.y - 4.0, 1, 3); px(t, 0xFFFFFFFF, m.x + 4.0, m.y - 4.0, 1, 1);
+        }
+        Objet::Piolet => {
+            // manche bleu, tête en acier : la pointe part vers l'avant
+            let (a, b) = dir(angle);
+            let (cx, cy) = (m.x + 0.5, m.y + 0.5);
+            trait_(t, 0xFF3A6EA5, cx - a * 2.0, cy - b * 2.0, cx + a * 6.0, cy + b * 6.0, 1);
+            let (hx, hy) = (cx + a * 6.0, cy + b * 6.0);
+            let (c, d) = dir(angle - 90.0);
+            trait_(t, p.metal, hx - c, hy - d, hx + c * 3.0, hy + d * 3.0, 1);
+            px(t, p.metal_shade, hx + c * 3.0 + a, hy + d * 3.0 + b, 1, 1);
+        }
+        Objet::Artefact => {
+            // gemme brillante sertie d'or, brandie au-dessus de la main
+            px(t, 0xFFE3BB4C, m.x - 1.0, m.y - 5.0, 4, 5);
+            px(t, 0xFF6FE7FF, m.x, m.y - 5.0, 2, 4); px(t, 0xFFE9FFFF, m.x, m.y - 5.0, 1, 1);
+            px(t, 0xFF3FB4CC, m.x + 1.0, m.y - 2.0, 1, 1);
+        }
         Objet::Rien => {}
     }
 }
@@ -249,7 +287,8 @@ fn rendre_pose(pose: &Pose, p: &Palette) -> Toile {
     let hy = HANCHE + by;
 
     let mut fond = Toile::new(W, H);
-    dessiner_bras(&mut fond, p, 18.0, 18.0 + u, pose.arm_b, true);
+    let main_b = dessiner_bras(&mut fond, p, 18.0, 18.0 + u, pose.arm_b, true);
+    objet(&mut fond, p, &main_b, pose.objet_b, pose.obj_b_a, pose);
     dessiner_jambe(&mut fond, p, 18.0, hy, pose.leg_b, true);
     sac(&mut fond, p, u);
 
@@ -261,7 +300,7 @@ fn rendre_pose(pose: &Pose, p: &Palette) -> Toile {
 
     let mut devant = Toile::new(W, H);
     let main = dessiner_bras(&mut devant, p, 20.0, 18.0 + u, pose.arm_f, false);
-    objet(&mut devant, p, &main, pose);
+    objet(&mut devant, p, &main, pose.objet, pose.obj_a, pose);
 
     let mut fin = Toile::new(W, H);
     for c in [&mut fond, &mut milieu, &mut devant] {
@@ -377,6 +416,39 @@ pub fn anims() -> &'static Vec<Anim> {
             Anim { cle: "ko", nom: "KO (couché)", fps: 1.0, boucle: true, poses: vec![
                 Pose { air: true, leg_f: (20.0, 0.0), leg_b: (-15.0, 0.0), arm_f: (70.0, 20.0), arm_b: (-60.0, 0.0), yeux: Yeux::Croix, bouche: Bouche::O, ..d() },
             ] },
+            Anim { cle: "huff", nom: "Souffler sur l'écran", fps: 3.0, boucle: true, poses: (0..2).map(|k| Pose {
+                arm_f: (40.0, 30.0), arm_b: (10.0, 10.0), objet: Objet::Mouchoir, bouche: Bouche::O, ub: k, leg_f: (15.0, 10.0), leg_b: (-8.0, 0.0),
+                yeux: if k == 1 { Yeux::Fermes } else { Yeux::Ouverts }, ..d() }).collect() },
+            Anim { cle: "wipe", nom: "Nettoyer l'écran (mouchoir)", fps: 7.0, boucle: true,
+                poses: [(100.0, 10.0), (122.0, -8.0), (135.0, -25.0), (112.0, -15.0)].iter().enumerate().map(|(k, &arm_f)| Pose {
+                    arm_f, arm_b: (20.0 + 6.0 * (k % 2) as f32, 15.0), objet: Objet::Mouchoir, leg_f: (12.0, 0.0), leg_b: (-10.0, 0.0),
+                    ub: (k % 2) as i32, echarpe: (k % 2) as i32, ..d() }).collect() },
+            Anim { cle: "loupe", nom: "Inspecter à la loupe", fps: 3.0, boucle: true, poses: (0..4).map(|k| Pose {
+                arm_f: (75.0 + 6.0 * (k % 2) as f32, 15.0), arm_b: (-20.0, 30.0), objet: Objet::Loupe, obj_a: 95.0 - 8.0 * (k % 2) as f32,
+                leg_f: (20.0, 40.0), leg_b: (-5.0, 35.0), ub: 1, yeux: if k == 2 { Yeux::Haut } else { Yeux::Ouverts },
+                bouche: if k == 3 { Bouche::O } else { Bouche::Neutre }, ..d() }).collect() },
+            Anim { cle: "jumelles", nom: "Espionner aux jumelles", fps: 2.0, boucle: true, poses: (0..4).map(|k| Pose {
+                arm_f: (150.0, -60.0), arm_b: (140.0, -50.0), objet: Objet::Jumelles, ub: [0, 1, 0, 0][k],
+                leg_f: (8.0, 0.0), leg_b: (-8.0, 0.0), chapeau_y: -[0, 0, 1, 0][k], bouche: if k == 2 { Bouche::O } else { Bouche::Neutre },
+                ..d() }).collect() },
+            Anim { cle: "trip", nom: "Trébucher", fps: 7.0, boucle: false, poses: vec![
+                Pose { leg_f: (30.0, 10.0), leg_b: (-45.0, 70.0), arm_f: (60.0, 30.0), arm_b: (100.0, 20.0), yeux: Yeux::Haut, bouche: Bouche::O, ..d() },
+                Pose { air: true, by: 2, leg_f: (-10.0, 30.0), leg_b: (-60.0, 50.0), arm_f: (120.0, 20.0), arm_b: (160.0, -30.0), yeux: Yeux::Haut,
+                    bouche: Bouche::O, chapeau_y: -2, echarpe: 1, ..d() },
+                Pose { air: true, by: 4, leg_f: (-30.0, 20.0), leg_b: (-70.0, 30.0), arm_f: (95.0, 0.0), arm_b: (110.0, 10.0), yeux: Yeux::Fermes,
+                    bouche: Bouche::O, chapeau_y: -3, ..d() },
+            ] },
+            Anim { cle: "piolet", nom: "Escalade au piolet", fps: 4.0, boucle: true, poses: (0..4).map(|k| {
+                // un piolet planté en haut pendant que l'autre remonte ; les pieds cherchent une prise
+                let (haut, bas) = (((165.0, -15.0), 165.0), ((120.0, 35.0), 130.0));
+                let (f, b) = if k < 2 { (haut, bas) } else { (bas, haut) };
+                let (lf, lb) = if k % 2 == 0 { ((70.0, 100.0), (10.0, 20.0)) } else { ((40.0, 60.0), (35.0, 55.0)) };
+                Pose { air: true, arm_f: f.0, obj_a: f.1, arm_b: b.0, obj_b_a: b.1, objet: Objet::Piolet, objet_b: Objet::Piolet,
+                    leg_f: lf, leg_b: lb, ub: (k % 2) as i32, echarpe: (k % 2) as i32, ..d() }
+            }).collect() },
+            Anim { cle: "artefact", nom: "Brandir un artefact", fps: 6.0, boucle: true, poses: (0..4).map(|k| Pose {
+                arm_f: (170.0 - 4.0 * (k % 2) as f32, 0.0), arm_b: (130.0, 20.0), objet: Objet::Artefact, etincelle: Some(k),
+                yeux: Yeux::Contents, bouche: Bouche::Sourire, ub: (k % 2) as i32, echarpe: (k % 2) as i32, ..d() }).collect() },
         ]
     })
 }
@@ -438,6 +510,45 @@ pub fn coeur(t: &mut Toile, u: i32, x: i32, y: i32, alpha: f32) {
 pub fn etoile(t: &mut Toile, u: i32, x: i32, y: i32) {
     t.rect(0xFFFFE066, x, y - u, u, 3 * u);
     t.rect(0xFFFFE066, x - u, y, 3 * u, u);
+}
+
+/// Buée et traces de doigts sur la vitre, centrées en (`x`, `y`) ; `p` = opacité (1 = sale, 0 = propre).
+pub fn buee(t: &mut Toile, u: i32, x: i32, y: i32, p: f32) {
+    let a = (p.clamp(0.0, 1.0) * 150.0) as u32;
+    if a == 0 { return; }
+    let voile = (a << 24) | 0x00D8E4EC;
+    for (dx, dy, w, h) in [(-5, -3, 10, 6), (-7, -1, 14, 3), (-3, -5, 6, 10), (-6, -2, 12, 5)] {
+        t.rect(voile, x + dx * u, y + dy * u, w * u, h * u);
+    }
+    // deux empreintes de doigts, plus marquées
+    let trace = (((a * 3 / 4) as u32) << 24) | 0x00A8B4C0;
+    for (cx, cy) in [(-3, -1), (3, 1)] {
+        for (dx, dy, w) in [(0, 0, 3), (-1, 1, 5), (-1, 2, 5), (0, 3, 3)] { t.rect(trace, x + (cx + dx) * u, y + (cy + dy - 2) * u, w * u, u / 2 + 1); }
+    }
+}
+
+/// Petit caillou posé sur le sol `y`, centré en `x`.
+pub fn caillou(t: &mut Toile, u: i32, x: i32, y: i32) {
+    t.rect(NOIR, x - 3 * u, y - 3 * u, 6 * u, 3 * u);
+    t.rect(NOIR, x - 2 * u, y - 4 * u, 4 * u, u);
+    t.rect(0xFF8A8494, x - 2 * u, y - 3 * u, 4 * u, 2 * u);
+    t.rect(0xFFB5B0BF, x - u, y - 3 * u, u, u);
+    t.rect(0xFF5E5868, x - 2 * u, y - u, 4 * u, u);
+}
+
+/// Éclat de lumière magique qui s'étend autour de (`x`, `y`) ; `p` = temps écoulé (s).
+pub fn eclat(t: &mut Toile, u: i32, x: i32, y: i32, p: f32) {
+    let r = 2.0 + p.min(1.2) * 14.0;
+    let cols = [0xFF6FE7FF, 0xFFE9DCFF, 0xFFFFE066, 0xFFB98CFF];
+    for i in 0..10 {
+        let ang = i as f32 * std::f32::consts::TAU / 10.0 + p * 2.0;
+        let rr = r * if i % 2 == 0 { 1.0 } else { 0.7 };
+        let (sx, sy) = (x + (ang.cos() * rr * u as f32) as i32, y + (ang.sin() * rr * u as f32) as i32);
+        let c = cols[i % 4];
+        t.rect(c, sx, sy - u, u, 3 * u);
+        t.rect(c, sx - u, sy, 3 * u, u);
+    }
+    if p < 0.4 { t.rect(0xFFFFFFFF, x - 2 * u, y - 2 * u, 4 * u, 4 * u); }
 }
 
 pub fn anim(cle: &str) -> &'static Anim {
