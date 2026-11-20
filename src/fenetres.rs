@@ -156,14 +156,63 @@ impl Calque {
     }
 }
 
-/// Ordre d'empilement. `devant` : au-dessus de tout (du haut vers le bas) ; `derriere` : au niveau du bureau,
-/// sous toutes les fenêtres des applications (du haut vers le bas).
-pub fn empiler(devant: &[HWND], derriere: &[HWND]) {
+/// Ordre d'empilement. `devant` : au-dessus de tout (du haut vers le bas) ; `derriere` (du haut vers le bas) :
+/// juste sous la fenêtre `sous` si elle est donnée (une appli protégée), sinon au niveau du bureau, sous toutes les applis.
+pub fn empiler(devant: &[HWND], derriere: &[HWND], sous: Option<isize>) {
     unsafe {
         for h in devant.iter().rev() { let _ = SetWindowPos(*h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
-        // HWND_BOTTOM retire l'état « toujours visible » ; le dernier placé finit tout en bas
-        for h in derriere { let _ = SetWindowPos(*h, Some(HWND_BOTTOM), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+        match sous {
+            Some(s) => {
+                // placée après une fenêtre normale, chacune perd l'état « toujours visible » et s'enchaîne sous la précédente
+                let mut apres = HWND(s as *mut c_void);
+                for h in derriere {
+                    let _ = SetWindowPos(*h, Some(apres), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    apres = *h;
+                }
+            }
+            // HWND_BOTTOM retire l'état « toujours visible » ; le dernier placé finit tout en bas
+            None => for h in derriere { let _ = SetWindowPos(*h, Some(HWND_BOTTOM), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); },
+        }
     }
+}
+
+/// Fenêtre d'application visible (pour les applis protégées).
+#[derive(Clone, Debug)]
+pub struct FenetreAppli { pub hwnd: isize, pub x0: f32, pub y0: f32, pub x1: f32, pub y1: f32, pub exe: String, pub titre: String }
+
+/// Nom de l'exécutable (en minuscules, ex. « teams.exe ») du processus d'une fenêtre ; mis en cache par processus.
+fn exe_de(h: HWND) -> Option<String> {
+    use std::collections::HashMap;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
+    static CACHE: Mutex<Option<HashMap<u32, String>>> = Mutex::new(None);
+    let mut pid = 0u32;
+    unsafe { let _ = GetWindowThreadProcessId(h, Some(&mut pid as *mut u32)); }
+    if pid == 0 { return None; }
+    if let Some(e) = CACHE.lock().unwrap().as_ref().and_then(|c| c.get(&pid).cloned()) { return Some(e); }
+    let exe = unsafe {
+        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut n = buf.len() as u32;
+        let r = QueryFullProcessImageNameW(p, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n);
+        let _ = CloseHandle(p);
+        r.ok()?;
+        let chemin = String::from_utf16_lossy(&buf[..n as usize]);
+        chemin.rsplit('\\').next().unwrap_or("").to_lowercase()
+    };
+    if exe.is_empty() { return None; }
+    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(pid, exe.clone());
+    Some(exe)
+}
+
+/// Fenêtres d'applications visibles, de la plus haute à la plus basse, avec leur exécutable et leur titre.
+pub fn applis() -> Vec<FenetreAppli> {
+    fenetres_pleines().into_iter().filter_map(|(h, r)| {
+        let exe = exe_de(h)?;
+        let mut buf = [0u16; 256];
+        let n = unsafe { GetWindowTextW(h, &mut buf) }.max(0) as usize;
+        Some(FenetreAppli { hwnd: h.0 as isize, x0: r.left as f32, y0: r.top as f32, x1: r.right as f32, y1: r.bottom as f32, exe,
+            titre: String::from_utf16_lossy(&buf[..n]) })
+    }).collect()
 }
 
 /// Bouton gauche de la souris enfoncé (même hors de nos fenêtres).
@@ -175,38 +224,9 @@ pub fn bouton_gauche() -> bool {
 /// Dessus visibles des fenêtres ouvertes, où le personnage peut marcher. La fenêtre active
 /// (au premier plan) est exclue : il ne vient pas déranger l'appli qu'on utilise.
 pub fn plateformes() -> Vec<crate::monde::Plateforme> {
-    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
-    unsafe extern "system" fn cb(h: HWND, lp: LPARAM) -> BOOL {
-        unsafe { (*(lp.0 as *mut Vec<HWND>)).push(h); }
-        BOOL(1)
-    }
-    let mut toutes: Vec<HWND> = vec![];
-    unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut toutes as *mut _ as isize)); }
     let active = unsafe { GetForegroundWindow() };
-    // fenêtres « pleines », de la plus haute à la plus basse
-    let mut pleines: Vec<(HWND, RECT, bool)> = vec![];
-    for h in toutes {
-        unsafe {
-            if !IsWindowVisible(h).as_bool() || IsIconic(h).as_bool() { continue; }
-            let mut masque: u32 = 0;
-            let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut masque as *mut _ as *mut c_void, 4);
-            if masque != 0 { continue; }
-            let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
-            if ex & WS_EX_TOOLWINDOW.0 != 0 || ex & WS_EX_TRANSPARENT.0 != 0 { continue; }
-            if GetWindowTextLengthW(h) == 0 { continue; }
-            let mut classe = [0u16; 64];
-            let n = GetClassNameW(h, &mut classe) as usize;
-            let classe = String::from_utf16_lossy(&classe[..n]);
-            if ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow"].contains(&classe.as_str()) { continue; }
-            let mut r = RECT::default();
-            if DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut _ as *mut c_void, size_of::<RECT>() as u32).is_err() {
-                let _ = GetWindowRect(h, &mut r);
-            }
-            if r.right - r.left < 150 || r.bottom - r.top < 80 { continue; }
-            let praticable = h != active && !IsZoomed(h).as_bool();
-            pleines.push((h, r, praticable));
-        }
-    }
+    let pleines: Vec<(HWND, RECT, bool)> = fenetres_pleines().into_iter()
+        .map(|(h, r)| (h, r, h != active && !unsafe { IsZoomed(h) }.as_bool())).collect();
     let mut p = vec![];
     for (i, (h, r, praticable)) in pleines.iter().enumerate() {
         if !praticable { continue; }
@@ -226,6 +246,40 @@ pub fn plateformes() -> Vec<crate::monde::Plateforme> {
         }
     }
     p
+}
+
+/// Fenêtres d'applications « pleines » (visibles, non réduites, avec un titre), de la plus haute à la plus basse.
+fn fenetres_pleines() -> Vec<(HWND, RECT)> {
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    unsafe extern "system" fn cb(h: HWND, lp: LPARAM) -> BOOL {
+        unsafe { (*(lp.0 as *mut Vec<HWND>)).push(h); }
+        BOOL(1)
+    }
+    let mut toutes: Vec<HWND> = vec![];
+    unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut toutes as *mut _ as isize)); }
+    let mut pleines: Vec<(HWND, RECT)> = vec![];
+    for h in toutes {
+        unsafe {
+            if !IsWindowVisible(h).as_bool() || IsIconic(h).as_bool() { continue; }
+            let mut masque: u32 = 0;
+            let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut masque as *mut _ as *mut c_void, 4);
+            if masque != 0 { continue; }
+            let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+            if ex & WS_EX_TOOLWINDOW.0 != 0 || ex & WS_EX_TRANSPARENT.0 != 0 { continue; }
+            if GetWindowTextLengthW(h) == 0 { continue; }
+            let mut classe = [0u16; 64];
+            let n = GetClassNameW(h, &mut classe) as usize;
+            let classe = String::from_utf16_lossy(&classe[..n]);
+            if ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow"].contains(&classe.as_str()) { continue; }
+            let mut r = RECT::default();
+            if DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut _ as *mut c_void, size_of::<RECT>() as u32).is_err() {
+                let _ = GetWindowRect(h, &mut r);
+            }
+            if r.right - r.left < 150 || r.bottom - r.top < 80 { continue; }
+            pleines.push((h, r));
+        }
+    }
+    pleines
 }
 
 /// Titre de la fenêtre au premier plan (ce qu'il espionne aux jumelles), hors bureau, barre des tâches et PixelPal.

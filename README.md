@@ -16,7 +16,7 @@
 
 ![Le panneau de PixelPal : l'aventurier attend devant sa maisonnette, sous la lune, un château féerique sur la colline.](assets/images/banniere.png)
 
-PixelPal lit la disposition de tes écrans dans Windows et y fait vivre un personnage. Il se promène au niveau du bureau, derrière tes fenêtres : une appli au premier plan le cache, et il ne vient jamais s'installer sur celle que tu utilises. Quand un écran est au-dessus, il pose une échelle ; quand il est en dessous, il creuse un trou ; quand rien ne se touche, il ouvre un portail.
+PixelPal lit la disposition de tes écrans dans Windows et y fait vivre un personnage. Il se promène devant tes fenêtres, sauf celles des **applis protégées** (panneau > Perso > Comportement) : il se glisse alors derrière elles. Il ne vient jamais s'installer sur l'appli que tu utilises. Quand un écran est au-dessus, il pose une échelle ; quand il est en dessous, il creuse un trou ; quand rien ne se touche, il ouvre un portail.
 
 On peut l'attraper à la souris, le nourrir, le caresser… et l'oublier : sans manger, il finit en fantôme au-dessus de sa tombe. Et quand tu écris à un collègue, il part livrer la lettre en personne : un visiteur sort d'un portail sur l'écran de chaque destinataire, en même temps, même à l'autre bout d'internet.
 
@@ -120,7 +120,7 @@ Chaque image est une **pose** (angles des membres, objet tenu, yeux, bouche) des
 | `src/monde.rs` | Simulation : écrans et liens, trajets, surfaces (sol, fenêtres, plafond), chutes, visiteurs. |
 | `src/soins.rs` | Tamagotchi : faim, santé, joie, réserve, jardin, mort. |
 | `src/sprites.rs` | Le personnage par poses ; échelle, trou, portail, parachute, tombe, cœurs. |
-| `src/fenetres.rs` | Petites fenêtres Windows transparentes, ordre d'empilement (derrière les applis), fenêtres praticables, écrans, icône. |
+| `src/fenetres.rs` | Petites fenêtres Windows transparentes, ordre d'empilement (devant les applis, derrière les applis protégées), fenêtres praticables, écrans, icône. |
 | `src/reseau.rs`, `src/pair.rs` | Pair-à-pair iroh, découverte locale, canal local du panneau (127.0.0.1). |
 | `src/panneau.rs`, `src/scene.rs`, `src/menu.rs` | Panneau egui, bannière, police pixel maison, menu de soins. |
 | `src/maj.rs` | Mise à jour automatique depuis les releases. |

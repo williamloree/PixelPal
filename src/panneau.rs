@@ -134,6 +134,8 @@ struct Panneau {
     tex_scene: Option<TextureHandle>,
     tex_dalle: Option<TextureHandle>,
     debut: Instant,
+    apps: Vec<(String, String)>, // applis ouvertes : (exécutable, titre)
+    apps_charge: bool,
 }
 
 impl Panneau {
@@ -157,7 +159,7 @@ impl Panneau {
             retour_t: Instant::now(), groupe: String::new(), tous: true, choix: HashSet::new(), texte: String::new(), nom_groupe: String::new(),
             choix_groupe: HashSet::new(), code: String::new(), nom: String::new(), look: "aventurier".into(), profil_charge: false,
             sprites: Sprites::default(), textures: HashMap::new(), etiquettes: HashMap::new(), toile_scene: Toile::new(scene::SW, scene::SH),
-            tex_scene: None, tex_dalle: None, debut: Instant::now() }
+            tex_scene: None, tex_dalle: None, debut: Instant::now(), apps: vec![], apps_charge: false }
     }
 
     fn temps(&self) -> f32 { self.debut.elapsed().as_secs_f32() }
@@ -171,6 +173,16 @@ impl Panneau {
     }
 
     fn dire(&mut self, s: String) { self.retour = s; self.retour_t = Instant::now(); }
+
+    /// Liste des applis ouvertes (exécutable, titre d'une de leurs fenêtres), triée.
+    fn charger_apps(&mut self) {
+        self.apps_charge = true;
+        let r = self.appeler("apps", json!({}));
+        self.apps = r["apps"].as_array().map(|l| l.iter()
+            .map(|a| (a["exe"].as_str().unwrap_or("").to_string(), a["titre"].as_str().unwrap_or("").to_string()))
+            .filter(|(e, _)| !e.is_empty()).collect()).unwrap_or_default();
+        self.apps.sort();
+    }
 
     /// Lance une commande et garde le message de retour.
     fn action(&mut self, cmd: &str, extra: Value, succes: &str) -> bool {
@@ -696,16 +708,50 @@ impl Panneau {
         let rep = Self::cadre().show(ui, |ui| {
             ui.set_width(ui.available_width());
             self.titre(ui, "COMPORTEMENT");
-            let mut derriere = self.etat["options"]["devant"] != true;
+            let mut derriere = self.etat["options"]["passe_devant"] == false;
             let mut fenetres = self.etat["options"]["fenetres"] != false;
-            if ui.checkbox(&mut derriere, "Rester derrière les fenêtres (au niveau du bureau)").changed() {
-                self.action("options", json!({"devant": !derriere}), if derriere { "Il reste sur le bureau, derrière tes applis." } else { "Il passe devant les fenêtres." });
+            if ui.checkbox(&mut derriere, "Rester derrière toutes les fenêtres (au niveau du bureau)").changed() {
+                self.action("options", json!({"passe_devant": !derriere}),
+                    if derriere { "Il reste sur le bureau, derrière tes applis." } else { "Il passe devant tes applis (sauf les protégées)." });
             }
             ui.small("Les visiteurs qui t'apportent une lettre restent toujours visibles.");
             if ui.checkbox(&mut fenetres, "Marcher sur le dessus des fenêtres ouvertes").changed() {
                 self.action("options", json!({"fenetres": fenetres}), "C'est noté.");
             }
             ui.small("Jamais sur la fenêtre active : il ne vient pas déranger l'appli que tu utilises.");
+
+            // applis devant lesquelles il n'a pas le droit de passer
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Applis protégées").strong().color(c(OR)));
+            ui.small("Il ne passe jamais devant les fenêtres des applis cochées : il se glisse derrière elles.");
+            if !self.apps_charge { self.charger_apps(); }
+            let exclues: Vec<String> = self.etat["options"]["exclues"].as_array()
+                .map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            let mut lignes = self.apps.clone();
+            for e in &exclues {
+                if !lignes.iter().any(|(x, _)| x == e) { lignes.push((e.clone(), "(fermée pour l'instant)".into())); }
+            }
+            let mut nouvelles: Option<Vec<String>> = None;
+            egui::ScrollArea::vertical().max_height(180.0).id_salt("applis").show(ui, |ui| {
+                if lignes.is_empty() { ui.small("Aucune appli ouverte."); }
+                for (exe, titre) in &lignes {
+                    ui.horizontal(|ui| {
+                        let mut coche = exclues.contains(exe);
+                        if ui.checkbox(&mut coche, exe.as_str()).changed() {
+                            let mut l = exclues.clone();
+                            if coche { l.push(exe.clone()); } else { l.retain(|x| x != exe); }
+                            nouvelles = Some(l);
+                        }
+                        let court: String = titre.chars().take(42).collect();
+                        ui.label(egui::RichText::new(court).small().color(c(LAVANDE)));
+                    });
+                }
+            });
+            if let Some(l) = nouvelles {
+                let protege = l.len() > exclues.len();
+                self.action("options", json!({"exclues": l}), if protege { "Appli protégée : il passera derrière." } else { "Il peut de nouveau passer devant." });
+            }
+            if ui.button("Actualiser la liste des applis").clicked() { self.charger_apps(); }
         });
         self.ornements(ui.painter(), rep.response.rect);
         ui.add_space(10.0);

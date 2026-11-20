@@ -166,6 +166,7 @@ fn lancer(profil: Option<String>) {
     let mut sauvegarde = Instant::now();
     let mut saisie: Option<Saisie> = None;
     let mut menu: Option<Menu> = None;
+    let mut protegees: Vec<fenetres::FenetreAppli> = vec![];
 
     while fenetres::pomper() && !app.quitter {
         let debut = Instant::now();
@@ -232,6 +233,10 @@ fn lancer(profil: Option<String>) {
             app.monde.definir_plateformes(p);
             // on garde la dernière appli utilisée (le panneau et le bureau ne comptent pas)
             if let Some(t) = fenetres::titre_actif() { app.monde.titre_actif = Some(t); }
+            // fenêtres des applis protégées (il ne passe jamais devant)
+            protegees = if app.cfg.passe_devant && !app.cfg.exclues.is_empty() {
+                fenetres::applis().into_iter().filter(|f| app.cfg.exclues.contains(&f.exe)).collect()
+            } else { vec![] };
         }
 
         while let Ok(evt) = rx.try_recv() { app.evenement(evt); }
@@ -261,7 +266,17 @@ fn lancer(profil: Option<String>) {
             if tenu || m.ouvert.elapsed() > Duration::from_secs(15) { menu = None; } else { m.maj(&app.monde.soins); }
         }
 
-        dessiner(&app.monde, &mut sprites, &mut calques, menu.as_mut(), app.cfg.devant);
+        // devant les applis, sauf les protégées : s'il en chevauche une, il passe juste derrière elle
+        let ordre = if !app.cfg.passe_devant { Ordre::Bureau } else {
+            let uf = app.monde.u() as f32;
+            let sous = app.monde.acteurs.iter().find(|a| a.id == MOI).and_then(|a| {
+                let (x0, x1) = (a.x - 20.0 * uf, a.x + 20.0 * uf);
+                let (y0, y1) = if a.renverse { (a.y, a.y + 45.0 * uf) } else { (a.y - 45.0 * uf, a.y) };
+                protegees.iter().find(|f| f.x0 < x1 && f.x1 > x0 && f.y0 < y1 && f.y1 > y0).map(|f| f.hwnd)
+            });
+            match sous { Some(h) => Ordre::Sous(h), None => Ordre::Devant }
+        };
+        dessiner(&app.monde, &mut sprites, &mut calques, menu.as_mut(), ordre);
 
         let ecoule = debut.elapsed();
         if ecoule < Duration::from_millis(33) { std::thread::sleep(Duration::from_millis(33) - ecoule); }
@@ -316,13 +331,23 @@ fn toile_acteur(a: &monde::Acteur, sprites: &mut sprites::Sprites, u: i32, temps
     (t, cx, pied)
 }
 
-/// Met à jour les petites fenêtres. Le personnage vit derrière les fenêtres des applis (au niveau du bureau),
-/// sauf option « devant » ou quand on le tient ; les visiteurs et le menu restent toujours visibles.
-fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<String, Calque>, menu: Option<&mut Menu>, devant_opt: bool) {
+/// Où placer le personnage (et ses décors) dans la pile des fenêtres.
+#[derive(Clone, Copy, PartialEq)]
+enum Ordre {
+    Devant,      // au-dessus de toutes les applis
+    Bureau,      // au niveau du bureau, derrière toutes les applis
+    Sous(isize), // juste derrière cette fenêtre (une appli protégée qu'il chevauche)
+}
+
+/// Met à jour les petites fenêtres et les empile selon `ordre` (toujours devant quand on le tient) ;
+/// les visiteurs et le menu restent toujours visibles.
+fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<String, Calque>, menu: Option<&mut Menu>, ordre: Ordre) {
     let u = m.u();
     let mut vus = HashSet::new();
     let (mut devant, mut derriere_decor, mut derriere_perso, mut derriere_bulles) = (vec![], vec![], vec![], vec![]);
-    let moi_devant = devant_opt || m.acteurs.iter().any(|a| a.id == MOI && a.porte);
+    let tenu = m.acteurs.iter().any(|a| a.id == MOI && a.porte);
+    let moi_devant = ordre == Ordre::Devant || tenu;
+    let sous = match ordre { Ordre::Sous(h) if !tenu => Some(h), _ => None };
     for o in &m.objets {
         let cle = format!("o{}", o.id);
         let (gauche, haut, t) = match o.t {
@@ -424,7 +449,7 @@ fn dessiner(m: &Monde, sprites: &mut sprites::Sprites, calques: &mut HashMap<Str
     calques.retain(|c, _| vus.contains(c));
     // ordre derrière : bulles au-dessus du personnage, lui-même au-dessus de ses échelles
     let derriere: Vec<_> = derriere_bulles.into_iter().chain(derriere_perso).chain(derriere_decor).collect();
-    fenetres::empiler(&devant, &derriere);
+    fenetres::empiler(&devant, &derriere, sous);
 }
 
 impl Appli {
@@ -592,10 +617,23 @@ impl Appli {
                 match r { Ok(()) => { self.sauver(); json!({"ok": true}) } Err(e) => json!({"ok": false, "erreur": e}) }
             }
             "options" => {
-                if let Some(b) = v["devant"].as_bool() { self.cfg.devant = b; }
+                if let Some(b) = v["passe_devant"].as_bool() { self.cfg.passe_devant = b; }
+                if let Some(l) = v["exclues"].as_array() {
+                    self.cfg.exclues = l.iter().filter_map(|x| x.as_str()).map(|s| s.to_lowercase()).collect();
+                    self.cfg.exclues.sort();
+                    self.cfg.exclues.dedup();
+                }
                 if let Some(b) = v["fenetres"].as_bool() { self.cfg.fenetres = b; }
                 self.cfg.sauver();
                 json!({"ok": true})
+            }
+            "apps" => {
+                // applis ouvertes (une ligne par exécutable), pour choisir celles qu'il doit respecter
+                let mut vus = HashSet::new();
+                let apps: Vec<Value> = fenetres::applis().into_iter()
+                    .filter(|f| f.exe != "pixelpal.exe" && vus.insert(f.exe.clone()))
+                    .map(|f| json!({"exe": f.exe, "titre": f.titre})).collect();
+                json!({"ok": true, "apps": apps})
             }
             "quitter" => { self.quitter = true; json!({"ok": true}) }
             "maj" => {
@@ -621,7 +659,7 @@ impl Appli {
             "humeur": self.monde.soins.humeur(),
             "age": soins::duree(self.monde.soins.age),
             "record": soins::duree(self.monde.soins.record),
-            "options": {"devant": self.cfg.devant, "fenetres": self.cfg.fenetres},
+            "options": {"passe_devant": self.cfg.passe_devant, "exclues": self.cfg.exclues, "fenetres": self.cfg.fenetres},
             "code": self.reseau.code(),
             "contacts": contacts,
             "groupes": self.cfg.groupes,

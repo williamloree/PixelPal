@@ -31,9 +31,12 @@ pub struct Config {
     pub contacts: Vec<Membre>,
     #[serde(default)]
     pub soins: crate::soins::Soins,
-    /// Personnage au-dessus des fenêtres (sinon au niveau du bureau, derrière les applis).
+    /// Personnage devant les fenêtres des applis (sinon au niveau du bureau, derrière toutes les applis).
+    #[serde(default = "vrai")]
+    pub passe_devant: bool,
+    /// Applis protégées (exécutables en minuscules, ex. « teams.exe ») : il ne passe jamais devant leurs fenêtres.
     #[serde(default)]
-    pub devant: bool,
+    pub exclues: Vec<String>,
     /// Il peut marcher sur le dessus des fenêtres ouvertes (jamais sur la fenêtre active).
     #[serde(default = "vrai")]
     pub fenetres: bool,
@@ -65,7 +68,7 @@ impl Config {
         let _ = std::fs::create_dir_all(&dir);
         let fichier = dir.join("pixelpal.json");
         let mut c: Config = std::fs::read_to_string(&fichier).ok().and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| Config { fenetres: true, ..Default::default() });
+            .unwrap_or_else(|| Config { fenetres: true, passe_devant: true, ..Default::default() });
         if c.id.is_empty() { c.id = id_aleatoire(); }
         if c.nom.is_empty() {
             c.nom = match profil { Some(p) => format!("Testeur {p}"), None => std::env::var("USERNAME").unwrap_or_else(|_| "Moi".into()) };
